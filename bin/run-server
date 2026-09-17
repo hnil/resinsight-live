@@ -3,6 +3,14 @@
 # stdout is the MCP channel: everything else must go to stderr.
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# settings shared by every client (Claude Code, Claude Desktop, others), e.g. RESINSIGHT_EXECUTABLE=...
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/resinsight-mcp/env"
+if [ -f "$CONFIG" ]; then
+    set -a
+    . "$CONFIG"
+    set +a
+fi
 ENV_DIR="${RESINSIGHT_MCP_VENV:-${XDG_CACHE_HOME:-$HOME/.cache}/resinsight-mcp/venv}"
 PYTHON="${RESINSIGHT_MCP_PYTHON:-python3}"
 STAMP="$(cat "$ROOT/requirements.txt") rips==${RIPS_VERSION:-latest}"

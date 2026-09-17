@@ -12,6 +12,7 @@ import glob
 import functools
 import json
 import os
+import re
 import statistics
 import tempfile
 import time
@@ -111,6 +112,114 @@ def _guard(fn):
             return _err(exc)
 
     return wrapper
+
+
+# --------------------------------------------------------------------------- path allowlist
+
+# Claude's sandbox does not apply to MCP servers, so the server enforces its own limit.
+ALLOWED_DIRS_ENV = "RESINSIGHT_MCP_ALLOWED_DIRS"
+
+# fields of ResInsight commands that name files or folders; wellPath* fields are well names
+_COMMAND_PATH_FIELDS = {
+    "createGridCaseGroup": ["casePaths"],
+    "exportContourMapToText": ["exportFileName"],
+    "exportFlowCharacteristics": ["fileName"],
+    "exportMultiCaseSnapshots": ["gridListFile"],
+    "exportProperty": ["exportFile"],
+    "exportSnapshots": ["exportFolder"],
+    "exportWellLogPlotData": ["exportFolder"],
+    "importFormationNames": ["formationFiles"],
+    "importWellLogFiles": ["wellLogFiles", "wellLogFolder"],
+    "importWellPaths": ["wellPathFiles", "wellPathFolder"],
+    "loadCase": ["path"],
+    "openProject": ["path"],
+    "replaceCase": ["newGridFile"],
+    "replaceMultipleCases": ["casePairs.newGridFile"],
+    "replaceSourceCases": ["gridListFile"],
+    "saveProject": ["filePath"],
+    "setExportFolder": ["path"],
+    "setStartDir": ["path"],
+}
+_NOT_PATHS = {"wellPath", "wellPathNames", "filePrefix", "customFileName"}
+# the field holding an export's own target; without it the export goes to the global export folder
+_EXPORT_TARGET = {
+    "exportContourMapToText": "exportFileName",
+    "exportFlowCharacteristics": "fileName",
+    "exportProperty": "exportFile",
+    "exportSnapshots": "exportFolder",
+    "exportWellLogPlotData": "exportFolder",
+}
+_BLOCKED_COMMANDS = {"runOctaveScript": "it runs arbitrary Octave code"}
+_PATHISH = re.compile(r"path|file|folder|dir", re.IGNORECASE)
+
+
+def _allowed_dirs() -> List[Path]:
+    raw = os.environ.get(ALLOWED_DIRS_ENV, "")
+    return [Path(os.path.expanduser(d.strip())).resolve() for d in raw.split(os.pathsep) if d.strip()]
+
+
+def _check_path(path: str, what: str) -> None:
+    """Refuse a path outside RESINSIGHT_MCP_ALLOWED_DIRS; no limit when that is unset."""
+    roots = _allowed_dirs()
+    if not roots:
+        return
+    p = Path(os.path.expanduser(path))
+    if not p.is_absolute():
+        raise PermissionError(f"{what}: '{path}' must be an absolute path")
+    real = p.resolve()  # follows symlinks, so a link cannot lead out of an allowed directory
+    if not any(real == r or r in real.parents for r in roots):
+        raise PermissionError(
+            f"{what}: '{path}' is outside the allowed directories {[str(r) for r in roots]}"
+        )
+
+
+def _string_values(obj: Any, keys: List[str]) -> List[str]:
+    if isinstance(obj, list):
+        return [v for o in obj for v in _string_values(o, keys)]
+    if not keys:
+        return [obj] if isinstance(obj, str) else []
+    if isinstance(obj, dict) and keys[0] in obj:
+        return _string_values(obj[keys[0]], keys[1:])
+    return []
+
+
+def _pathlike_fields(desc, prefix: str = "") -> List[str]:
+    from google.protobuf.descriptor import FieldDescriptor
+
+    found = []
+    for f in desc.fields:
+        if f.type == FieldDescriptor.TYPE_STRING and _PATHISH.search(f.name):
+            found.append(prefix + f.name)
+        elif f.type == FieldDescriptor.TYPE_MESSAGE:
+            found += _pathlike_fields(f.message_type, f"{prefix}{f.name}.")
+    return found
+
+
+def _check_command(name: str, params: Dict[str, Any], desc) -> None:
+    if name in _BLOCKED_COMMANDS:
+        raise PermissionError(f"{name} is disabled: {_BLOCKED_COMMANDS[name]}")
+    if not _allowed_dirs():
+        return
+    vetted = set(_COMMAND_PATH_FIELDS.get(name, []))
+    unvetted = [f for f in _pathlike_fields(desc) if f not in vetted and f.split(".")[-1] not in _NOT_PATHS]
+    if unvetted:
+        # fail closed for commands added to ResInsight after this list was written
+        raise PermissionError(f"{name}: fields {unvetted} are not vetted for the directory limit")
+    for field in vetted:
+        for value in _string_values(params, field.split(".")):
+            if value:
+                _check_path(value, f"{name}.{field}")
+    custom = params.get("customFileName", "")
+    if custom and os.path.basename(custom) != custom:
+        raise PermissionError(f"{name}: customFileName must be a bare file name")
+    if name == "saveProject" and not params.get("filePath"):
+        raise PermissionError("saveProject: give filePath; saving in place may write outside the allowed directories")
+    target = _EXPORT_TARGET.get(name)
+    if name.startswith("export") and not (target and params.get(target)) and not _S.get("export_folder_ok"):
+        raise PermissionError(
+            f"{name} writes to ResInsight's export folder: first call setExportFolder with an "
+            "allowed directory, or pass an explicit output path"
+        )
 
 
 def _dumps(obj: Any) -> str:
@@ -562,6 +671,7 @@ def ri_set_cell_result(
 @_guard
 def ri_open(path: str, create_view: bool = True) -> str:
     """Open a ResInsight project (.rsp) or load a case (.EGRID/.GRID/.ODB) into the current project."""
+    _check_path(path, "ri_open")
     proj = _project()
     _S["cellinfo"].clear()
     if path.lower().endswith(".rsp"):
@@ -671,6 +781,10 @@ def ri_render(
 
     import render as _render
 
+    _check_path(case, "ri_render case")
+    for value, what in ((out, "ri_render out"), (template, "ri_render template")):
+        if value:
+            _check_path(value, what)
     if list_only:
         return _render.render(case, list_only=True)
     if not out:
@@ -686,14 +800,23 @@ def ri_render(
 @mcp.tool()
 @_guard
 def ri_execute_command(name: str = "", params: Optional[Dict[str, Any]] = None) -> str:
-    """Escape hatch to ResInsight's command API. Call with no name to list available commands."""
+    """Escape hatch to ResInsight's command API. Call with no name to list available commands.
+
+    runOctaveScript is disabled. With RESINSIGHT_MCP_ALLOWED_DIRS set, every file or folder
+    argument must lie inside those directories, and exports need an explicit target or an
+    export folder set through setExportFolder first.
+    """
     fields = Commands_pb2.CommandParams.DESCRIPTOR.fields_by_name
     if not name:
         return _dumps(sorted(fields))
     if name not in fields:
         raise ValueError(f"unknown command '{name}'; call with no name to list commands")
+    params = params or {}
+    _check_command(name, params, fields[name].message_type)
     msg_cls = getattr(Commands_pb2, fields[name].message_type.name)
-    reply = _project()._execute_command(**{name: msg_cls(**(params or {}))})
+    reply = _project()._execute_command(**{name: msg_cls(**params)})
+    if name == "setExportFolder":
+        _S["export_folder_ok"] = True  # only reached when the folder passed _check_command
     return _dumps({"command": name, "reply": str(reply)})
 
 

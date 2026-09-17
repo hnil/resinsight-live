@@ -65,9 +65,34 @@ read files the server writes, which is why `ri_render` returns its images inline
 | `RESINSIGHT_GRPC_PORT` | Port of the running ResInsight (default: search 50051–50071). |
 | `RESINSIGHT_MCP_PYTHON` | Python used to create the environment (default `python3`). |
 | `RESINSIGHT_MCP_VENV` | Where that environment lives. |
+| `RESINSIGHT_MCP_ALLOWED_DIRS` | Directories (separated by `:`) the server may read or write; see below. Unset: no limit. |
 
-Clients started from the macOS Dock do not see variables set in your shell profile; put them in
-the client's MCP configuration (`"env": {...}`) instead.
+Put these in `~/.config/resinsight-mcp/env`, one `NAME=value` per line. `bin/run-server` reads
+that file, so the settings apply to every client — including apps started from the macOS Dock,
+which never see variables from your shell profile:
+
+    RESINSIGHT_EXECUTABLE=/Applications/ResInsight.app/Contents/MacOS/ResInsight
+    RESINSIGHT_MCP_ALLOWED_DIRS=$HOME/simulations:$HOME/projects
+
+## Limiting which files the server touches
+
+Claude Code's sandbox confines only its Bash tool. MCP servers, and the ResInsight that
+`ri_render` starts, run outside it, and permission rules such as `Read(...)` do not apply to
+MCP tools either. With `RESINSIGHT_MCP_ALLOWED_DIRS` set, the server enforces the limit itself:
+
+- every path given to `ri_open`, `ri_render` (case, `out`, `template`) and every file or folder
+  argument of `ri_execute_command` must be absolute and resolve, after following symlinks,
+  inside one of the directories;
+- exports that write to ResInsight's global export folder are refused until `setExportFolder`
+  has been called with an allowed directory, and `saveProject` needs an explicit `filePath`;
+- commands with file arguments this server does not know about are refused.
+
+`runOctaveScript` is always disabled, since it runs arbitrary code.
+
+What the limit does not cover: files ResInsight opens by itself — the `UNRST`/`SMSPEC` next to a
+case (same directory), and the case files a project (`.rsp`) refers to — and anything done in the
+ResInsight GUI. `ri_render` and `ri_snapshot` write their own images to the system temp directory
+when no output folder is given.
 
 ## Starting ResInsight on macOS
 

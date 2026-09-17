@@ -19,7 +19,7 @@ if cfg.exists():
     shutil.copy(cfg, cfg.with_suffix(".json.bak"))
 entry = {"command": str(HERE / "bin/run-server")}
 # apps started from the Dock do not see shell variables, so carry these over explicitly
-env = {k: os.environ[k] for k in ("RESINSIGHT_EXECUTABLE", "RIPS_VERSION") if k in os.environ}
+env = {k: os.environ[k] for k in ("RESINSIGHT_EXECUTABLE", "RIPS_VERSION", "RESINSIGHT_MCP_ALLOWED_DIRS") if k in os.environ}
 if env:
     entry["env"] = env
 data.setdefault("mcpServers", {})["resinsight"] = entry
