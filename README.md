@@ -37,7 +37,7 @@ steps and cameras, and to read the images before describing them.
 
 **Claude Code**
 
-    claude plugin marketplace add <git URL or local path of this repository>
+    claude plugin marketplace add https://github.com/hnil/resinsight-mcp
     claude plugin install resinsight@resinsight-tools
 
 then restart Claude Code.

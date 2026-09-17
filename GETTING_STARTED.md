@@ -16,7 +16,7 @@ Things you can ask once it is installed:
 - *"Plot WBHP and WWIR for B-3H."*
 - *"What did I change in ResInsight since you last looked?"*
 
-> **Repository:** `<REPO-URL>` — replace this with the address you were given.
+> **Repository:** https://github.com/hnil/resinsight-mcp
 
 ---
 
@@ -40,7 +40,7 @@ environment the first time it starts, so you do not install any packages yoursel
 ## 3. Install the plugin in Claude Code
 
 ```bash
-claude plugin marketplace add <REPO-URL>
+claude plugin marketplace add https://github.com/hnil/resinsight-mcp
 claude plugin install resinsight@resinsight-tools
 ```
 
@@ -87,7 +87,7 @@ version and the cases you have open. Then: *"List the time steps, properties and
 
 ## Claude Desktop and Cowork
 
-1. `git clone <REPO-URL>` somewhere permanent.
+1. `git clone https://github.com/hnil/resinsight-mcp` somewhere permanent.
 2. Quit Claude completely with Cmd-Q — closing the window is not enough. The app rewrites its
    configuration file while it runs and would undo the change.
 3. Run `python3 <clone>/install_desktop.py`, then start Claude again.
