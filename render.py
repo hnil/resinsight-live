@@ -165,19 +165,22 @@ def render_summary(proj, grid: Path, vectors, out: Path, tmp: Path) -> list[Path
     sc = summary_case(proj, grid)
     available = set(sc.available_addresses().values)
     coll = proj.descendants(rips.SummaryPlotCollection)[0]
-    one = rips.generated.generated_classes
+    classes = rips.generated.generated_classes
+    multi = getattr(classes, "MultiSummaryPlot", None)  # absent from older rips releases
     written = []
     for vec in vectors:
         if vec not in available:
             print(f"skip {vec}: not in {grid.stem}.SMSPEC", file=sys.stderr)
             continue
-        before = len(proj.descendants(rips.MultiSummaryPlot))
+        kind = multi or rips.SummaryPlot
+        before = len(proj.descendants(kind))
         coll.new_summary_plot(summary_cases=[sc], address=vec)
-        page = proj.descendants(rips.MultiSummaryPlot)[before]
-        # the default 2x2 page squeezes a single curve into one quarter of the image
-        page.number_of_columns = one.NumberOfColumns._1
-        page.rows_per_page = one.RowsPerPage._1
-        page.update()
+        page = proj.descendants(kind)[before]
+        if multi:
+            # the default 2x2 page squeezes a single curve into one quarter of the image
+            page.number_of_columns = classes.NumberOfColumns._1
+            page.rows_per_page = classes.RowsPerPage._1
+            page.update()
         page.export_snapshot(export_folder=str(tmp))
         written.append(move_export(tmp, out / f"{grid.stem}_{vec.replace(':', '_')}.png"))
     return written

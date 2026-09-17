@@ -44,7 +44,7 @@ def _inst() -> rips.Instance:
     if inst is None:
         inst = rips.Instance.find()
         _S["inst"] = inst
-        _S["port"] = inst.port
+        _S["port"] = getattr(inst, "port", None) or os.environ.get("RESINSIGHT_GRPC_PORT")
     return inst
 
 
