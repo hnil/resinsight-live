@@ -17,6 +17,8 @@ reservoir simulation runs without touching the GUI.
   at chosen steps, IJK slices, camera presets, summary plots), closes it and returns the images
   inline. The same renderer is a command-line tool, `render.py`.
 
+New users: start with [GETTING_STARTED.md](GETTING_STARTED.md).
+
 The plugin also ships the `resinsight-pictures` skill, which tells Claude how to choose slices,
 steps and cameras, and to read the images before describing them.
 
