@@ -22,9 +22,12 @@ Things you can ask once it is installed:
 
 ## 1. Install ResInsight
 
-Download the release for your system from https://github.com/OPM/ResInsight/releases (the
-Python interface is included). On macOS, unzip it into `/Applications`; if macOS refuses to open
-it, follow the `README-macOS.txt` that comes with the download.
+Download the release for your system from https://github.com/OPM/ResInsight/releases. On
+macOS, unzip it into `/Applications`; if macOS refuses to open it, look for macOS notes included
+with the download.
+
+> So far the plugin has been tested with a ResInsight built from source on macOS, not with the
+> official releases. If Claude cannot reach an official release, please report it.
 
 ## 2. Check Python
 
@@ -92,8 +95,9 @@ version and the cases you have open. Then: *"List the time steps, properties and
    configuration file while it runs and would undo the change.
 3. Run `python3 <clone>/install_desktop.py`, then start Claude again.
 
-The server runs on your own computer, next to ResInsight. Cowork works in a separate sandbox and
-cannot open files on your computer, so pictures are handed to it directly.
+The server runs on your own computer, next to ResInsight. Cowork may not be able to open files on
+your computer, so pictures are handed to it directly. This setup has not been tested end to end
+yet.
 
 ## Security
 

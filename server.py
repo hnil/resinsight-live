@@ -827,7 +827,15 @@ if __name__ == "__main__":
     ap.add_argument("--http", action="store_true", help="serve over HTTP instead of stdio")
     ap.add_argument("--host", default="127.0.0.1", help="bind address for --http")
     ap.add_argument("--port", type=int, default=8765, help="port for --http")
+    ap.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="allow a --host other than loopback; the server has no authentication",
+    )
     args = ap.parse_args()
+    if args.http and args.host not in ("127.0.0.1", "localhost", "::1") and not args.allow_remote:
+        # anyone who reaches the port could drive ResInsight and read files
+        ap.error(f"--host {args.host} would expose an unauthenticated server; add --allow-remote to insist")
 
     if args.http:
         # stateless: each client keeps its own session, so several can attach at once

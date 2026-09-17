@@ -24,8 +24,9 @@ steps and cameras, and to read the images before describing them.
 
 ## Requirements
 
-- **ResInsight with its Python interface.** Official releases include it:
-  https://github.com/OPM/ResInsight/releases (macOS, Windows, Linux). For a source build see
+- **ResInsight with its Python interface.** Official releases
+  (https://github.com/OPM/ResInsight/releases) should include it, but so far this plugin has only
+  been tested with a source build on macOS; see
   [docs/building-resinsight-macos.md](docs/building-resinsight-macos.md).
 - **Python ≥ 3.11**, macOS or Linux. The launcher `bin/run-server` creates its own environment
   in `~/.cache/resinsight-mcp` on first start (about half a minute); later starts are instant.
@@ -49,14 +50,16 @@ then restart Claude Code.
 ```
 
 or one shared HTTP server for several clients:
-`bin/run-server --http --port 8765`, then use `http://127.0.0.1:8765/mcp`. Keep it bound to
-127.0.0.1: the tools control a desktop application and read local files.
+`bin/run-server --http --port 8765`, then use `http://127.0.0.1:8765/mcp`. The server has no
+authentication and controls a desktop application, so it refuses any other `--host` unless you
+add `--allow-remote`.
 
 **Claude Desktop.** Quit the app completely (it rewrites its config file while running), then
 run `python3 install_desktop.py`.
 
-**Cowork.** The server has to run on the machine where ResInsight runs. Cowork's sandbox cannot
-read files the server writes, which is why `ri_render` returns its images inline.
+**Cowork.** The server has to run on the machine where ResInsight runs. Cowork may not be able to
+read files the server writes, which is why `ri_render` returns its images inline. Not yet tested
+end to end.
 
 ## Configuration
 

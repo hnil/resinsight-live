@@ -7,5 +7,11 @@
     "email": "1936524+hnil@users.noreply.github.com"
   },
   "license": "GPL-3.0-or-later",
-  "keywords": ["resinsight", "reservoir", "simulation", "opm", "visualization"]
+  "keywords": [
+    "resinsight",
+    "reservoir",
+    "simulation",
+    "opm",
+    "visualization"
+  ]
 }

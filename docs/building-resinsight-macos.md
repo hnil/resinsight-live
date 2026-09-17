@@ -16,8 +16,7 @@ With Homebrew's gRPC and protobuf:
   externally-managed interpreter.
 - Newer protobuf (seen with 34.1) returns `absl::string_view` from descriptor `name()`, which
   breaks `GrpcInterface/RiaGrpcCommandService.cpp` in three places. The fix is a
-  `std::string(...)` conversion around each call (proposed upstream on branch
-  `grpc-protobuf-string-view`).
+  `std::string(...)` conversion around each call; this is not in upstream ResInsight yet.
 - `CMAKE_POLICY_VERSION_MINIMUM=3.5` is needed for the bundled googletest with CMake 4.
 
 The build generates the Python client (`GrpcInterface/Python/rips/generated/`) by running
