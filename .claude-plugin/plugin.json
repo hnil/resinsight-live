@@ -1,0 +1,11 @@
+{
+  "name": "resinsight",
+  "version": "0.1.0",
+  "description": "Watch and drive a running ResInsight, and render pictures and plots of reservoir simulation runs.",
+  "author": {
+    "name": "Halvor M. Nilsen",
+    "email": "1936524+hnil@users.noreply.github.com"
+  },
+  "license": "GPL-3.0-or-later",
+  "keywords": ["resinsight", "reservoir", "simulation", "opm", "visualization"]
+}

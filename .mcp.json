@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "resinsight": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/run-server"
+    }
+  }
+}

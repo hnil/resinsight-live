@@ -1,0 +1,14 @@
+{
+  "name": "resinsight-tools",
+  "description": "Claude plugins for ResInsight reservoir visualisation.",
+  "owner": {
+    "name": "Halvor M. Nilsen"
+  },
+  "plugins": [
+    {
+      "name": "resinsight",
+      "source": "./",
+      "description": "Watch and drive a running ResInsight, and render pictures and plots of reservoir simulation runs."
+    }
+  ]
+}
