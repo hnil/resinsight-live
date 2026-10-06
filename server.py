@@ -25,7 +25,7 @@ import rips
 import Commands_pb2
 
 mcp = MCPServer(
-    "resinsight",
+    "resinsight-live",
     instructions=(
         "Drives a running ResInsight (OPM's open-source reservoir visualisation) via gRPC. "
         "Start ResInsight with the gRPC server enabled, then call ri_status. "
@@ -117,7 +117,8 @@ def _guard(fn):
 # --------------------------------------------------------------------------- path allowlist
 
 # Claude's sandbox does not apply to MCP servers, so the server enforces its own limit.
-ALLOWED_DIRS_ENV = "RESINSIGHT_MCP_ALLOWED_DIRS"
+ALLOWED_DIRS_ENV = "RESINSIGHT_LIVE_ALLOWED_DIRS"
+OLD_ALLOWED_DIRS_ENV = "RESINSIGHT_MCP_ALLOWED_DIRS"  # read for one release after the rename
 
 # fields of ResInsight commands that name files or folders; wellPath* fields are well names
 _COMMAND_PATH_FIELDS = {
@@ -154,12 +155,12 @@ _PATHISH = re.compile(r"path|file|folder|dir", re.IGNORECASE)
 
 
 def _allowed_dirs() -> List[Path]:
-    raw = os.environ.get(ALLOWED_DIRS_ENV, "")
+    raw = os.environ.get(ALLOWED_DIRS_ENV) or os.environ.get(OLD_ALLOWED_DIRS_ENV, "")
     return [Path(os.path.expanduser(d.strip())).resolve() for d in raw.split(os.pathsep) if d.strip()]
 
 
 def _check_path(path: str, what: str) -> None:
-    """Refuse a path outside RESINSIGHT_MCP_ALLOWED_DIRS; no limit when that is unset."""
+    """Refuse a path outside RESINSIGHT_LIVE_ALLOWED_DIRS; no limit when that is unset."""
     roots = _allowed_dirs()
     if not roots:
         return
@@ -802,7 +803,7 @@ def ri_render(
 def ri_execute_command(name: str = "", params: Optional[Dict[str, Any]] = None) -> str:
     """Escape hatch to ResInsight's command API. Call with no name to list available commands.
 
-    runOctaveScript is disabled. With RESINSIGHT_MCP_ALLOWED_DIRS set, every file or folder
+    runOctaveScript is disabled. With RESINSIGHT_LIVE_ALLOWED_DIRS set, every file or folder
     argument must lie inside those directories, and exports need an explicit target or an
     export folder set through setExportFolder first.
     """

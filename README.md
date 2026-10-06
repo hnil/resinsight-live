@@ -1,4 +1,4 @@
-# resinsight-mcp
+# resinsight-live
 
 Lets Claude — Claude Code, Cowork, or any MCP client — look at and drive a running
 [ResInsight](https://resinsight.org) through its Python/gRPC API, and render pictures of
@@ -29,7 +29,7 @@ steps and cameras, and to read the images before describing them.
   been tested with a source build on macOS; see
   [docs/building-resinsight-macos.md](docs/building-resinsight-macos.md).
 - **Python ≥ 3.11**, macOS or Linux. The launcher `bin/run-server` creates its own environment
-  in `~/.cache/resinsight-mcp` on first start (about half a minute); later starts are instant.
+  in `~/.cache/resinsight-live` on first start (about half a minute); later starts are instant.
 - **Matching `rips` version.** `rips` must have the same year.month version as ResInsight. The
   launcher installs the newest one; for an older ResInsight set `RIPS_VERSION`, e.g.
   `RIPS_VERSION=2026.6.1.1`.
@@ -38,15 +38,15 @@ steps and cameras, and to read the images before describing them.
 
 **Claude Code**
 
-    claude plugin marketplace add https://github.com/hnil/resinsight-mcp
-    claude plugin install resinsight@resinsight-tools
+    claude plugin marketplace add https://github.com/hnil/resinsight-live
+    claude plugin install resinsight-live@hnil-reservoir-tools
 
 then restart Claude Code.
 
 **Any other MCP client** (stdio):
 
 ```json
-{ "mcpServers": { "resinsight": { "command": "/path/to/resinsight-mcp/bin/run-server" } } }
+{ "mcpServers": { "resinsight-live": { "command": "/path/to/resinsight-live/bin/run-server" } } }
 ```
 
 or one shared HTTP server for several clients:
@@ -68,22 +68,25 @@ end to end.
 | `RESINSIGHT_EXECUTABLE` | ResInsight binary used by `ri_render` / `render.py`. Default: `/Applications/ResInsight.app`, `~/Applications/ResInsight.app`, or `ResInsight` on `PATH`. |
 | `RIPS_VERSION` | Pin `rips` to your ResInsight version. |
 | `RESINSIGHT_GRPC_PORT` | Port of the running ResInsight (default: search 50051–50071). |
-| `RESINSIGHT_MCP_PYTHON` | Python used to create the environment (default `python3`). |
-| `RESINSIGHT_MCP_VENV` | Where that environment lives. |
-| `RESINSIGHT_MCP_ALLOWED_DIRS` | Directories (separated by `:`) the server may read or write; see below. Unset: no limit. |
+| `RESINSIGHT_LIVE_PYTHON` | Python used to create the environment (default `python3`). |
+| `RESINSIGHT_LIVE_VENV` | Where that environment lives. |
+| `RESINSIGHT_LIVE_ALLOWED_DIRS` | Directories (separated by `:`) the server may read or write; see below. Unset: no limit. |
 
-Put these in `~/.config/resinsight-mcp/env`, one `NAME=value` per line. `bin/run-server` reads
+Put these in `~/.config/resinsight-live/env`, one `NAME=value` per line. `bin/run-server` reads
 that file, so the settings apply to every client — including apps started from the macOS Dock,
 which never see variables from your shell profile:
 
     RESINSIGHT_EXECUTABLE=/Applications/ResInsight.app/Contents/MacOS/ResInsight
-    RESINSIGHT_MCP_ALLOWED_DIRS=$HOME/simulations:$HOME/projects
+    RESINSIGHT_LIVE_ALLOWED_DIRS=$HOME/simulations:$HOME/projects
+
+Upgrading from 0.1 (`resinsight-mcp`): the old `~/.config/resinsight-mcp/env` and
+`RESINSIGHT_MCP_*` names are still read, with a warning, until the next release.
 
 ## Limiting which files the server touches
 
 Claude Code's sandbox confines only its Bash tool. MCP servers, and the ResInsight that
 `ri_render` starts, run outside it, and permission rules such as `Read(...)` do not apply to
-MCP tools either. With `RESINSIGHT_MCP_ALLOWED_DIRS` set, the server enforces the limit itself:
+MCP tools either. With `RESINSIGHT_LIVE_ALLOWED_DIRS` set, the server enforces the limit itself:
 
 - every path given to `ri_open`, `ri_render` (case, `out`, `template`) and every file or folder
   argument of `ri_execute_command` must be absolute and resolve, after following symlinks,
@@ -110,8 +113,8 @@ it in System Settings → Privacy & Security, and then cannot load cases stored 
 
 ## render.py
 
-    ~/.cache/resinsight-mcp/venv/bin/python render.py RUN_DIR --list
-    ~/.cache/resinsight-mcp/venv/bin/python render.py RUN_DIR -o OUT \
+    ~/.cache/resinsight-live/venv/bin/python render.py RUN_DIR --list
+    ~/.cache/resinsight-live/venv/bin/python render.py RUN_DIR -o OUT \
         -p TEMP,STRESSXX -s first,last --slice j=6 -z 5 -v WBHP:B-3H
 
 ## Behaviour worth knowing
@@ -135,6 +138,12 @@ Things that were not obvious when building this:
   exporting, and export the page rather than the `SummaryPlot`.
 - rips sends its working directory to ResInsight on connect, and the connection fails if
   ResInsight may not read that folder; the launcher therefore starts the server from `$HOME`.
+
+## Related projects
+
+[LukasMosser/resinsight-mcp](https://github.com/LukasMosser/resinsight-mcp) is an independent
+ResInsight MCP server. Both can be installed together: names, environments and caches differ,
+and each should drive its own ResInsight instance.
 
 ## License
 

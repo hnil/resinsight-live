@@ -5,22 +5,27 @@ set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # settings shared by every client (Claude Code, Claude Desktop, others), e.g. RESINSIGHT_EXECUTABLE=...
-CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/resinsight-mcp/env"
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/resinsight-live/env"
+OLD_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/resinsight-mcp/env"
+if [ ! -f "$CONFIG" ] && [ -f "$OLD_CONFIG" ]; then
+    echo "resinsight-live: reading $OLD_CONFIG; move it to $CONFIG (old path dropped in the next release)" >&2
+    CONFIG="$OLD_CONFIG"
+fi
 if [ -f "$CONFIG" ]; then
     set -a
     . "$CONFIG"
     set +a
 fi
-ENV_DIR="${RESINSIGHT_MCP_VENV:-${XDG_CACHE_HOME:-$HOME/.cache}/resinsight-mcp/venv}"
-PYTHON="${RESINSIGHT_MCP_PYTHON:-python3}"
+ENV_DIR="${RESINSIGHT_LIVE_VENV:-${RESINSIGHT_MCP_VENV:-${XDG_CACHE_HOME:-$HOME/.cache}/resinsight-live/venv}}"
+PYTHON="${RESINSIGHT_LIVE_PYTHON:-${RESINSIGHT_MCP_PYTHON:-python3}}"
 STAMP="$(cat "$ROOT/requirements.txt") rips==${RIPS_VERSION:-latest}"
 
 if [ ! -x "$ENV_DIR/bin/python" ] || [ "$(cat "$ENV_DIR/.stamp" 2>/dev/null)" != "$STAMP" ]; then
     "$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 11))' || {
-        echo "resinsight-mcp: needs Python >= 3.11; set RESINSIGHT_MCP_PYTHON" >&2
+        echo "resinsight-live: needs Python >= 3.11; set RESINSIGHT_LIVE_PYTHON" >&2
         exit 1
     }
-    echo "resinsight-mcp: installing Python packages into $ENV_DIR" >&2
+    echo "resinsight-live: installing Python packages into $ENV_DIR" >&2
     "$PYTHON" -m venv "$ENV_DIR" >&2
     "$ENV_DIR/bin/pip" install -q --upgrade pip >&2
     "$ENV_DIR/bin/pip" install -q -r "$ROOT/requirements.txt" ${RIPS_VERSION:+"rips==$RIPS_VERSION"} >&2

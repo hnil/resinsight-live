@@ -16,7 +16,7 @@ Things you can ask once it is installed:
 - *"Plot WBHP and WWIR for B-3H."*
 - *"What did I change in ResInsight since you last looked?"*
 
-> **Repository:** https://github.com/hnil/resinsight-mcp
+> **Repository:** https://github.com/hnil/resinsight-live
 
 ---
 
@@ -43,25 +43,25 @@ environment the first time it starts, so you do not install any packages yoursel
 ## 3. Install the plugin in Claude Code
 
 ```bash
-claude plugin marketplace add https://github.com/hnil/resinsight-mcp
-claude plugin install resinsight@resinsight-tools
+claude plugin marketplace add https://github.com/hnil/resinsight-live
+claude plugin install resinsight-live@hnil-reservoir-tools
 ```
 
-Restart Claude Code. `claude mcp list` should now show `plugin:resinsight:resinsight … ✓ Connected`.
+Restart Claude Code. `claude mcp list` should now show `plugin:resinsight-live:resinsight-live … ✓ Connected`.
 The very first start takes up to half a minute while the Python environment is built.
 
 ## 4. Create the settings file
 
-Create `~/.config/resinsight-mcp/env` with one `NAME=value` per line:
+Create `~/.config/resinsight-live/env` with one `NAME=value` per line:
 
 ```
-RESINSIGHT_MCP_ALLOWED_DIRS=$HOME/Documents/simulations
+RESINSIGHT_LIVE_ALLOWED_DIRS=$HOME/Documents/simulations
 RESINSIGHT_EXECUTABLE=/Applications/ResInsight.app/Contents/MacOS/ResInsight
 ```
 
 | Setting | What to put there |
 |---|---|
-| `RESINSIGHT_MCP_ALLOWED_DIRS` | The folders with your simulation runs, separated by `:`. Claude can only open files and write pictures inside these. **Recommended** — see *Security*. |
+| `RESINSIGHT_LIVE_ALLOWED_DIRS` | The folders with your simulation runs, separated by `:`. Claude can only open files and write pictures inside these. **Recommended** — see *Security*. |
 | `RESINSIGHT_EXECUTABLE` | Only needed if ResInsight is not in `/Applications` (or `ResInsight` on your `PATH` on Linux). |
 | `RIPS_VERSION` | Only needed if your ResInsight is not the newest release. It must have the same year and month as your ResInsight, e.g. `2026.6.1.1` for ResInsight 2026.06; versions are listed at https://pypi.org/project/rips/#history. |
 | `RESINSIGHT_GRPC_PORT` | Only if you changed ResInsight's scripting port from 50051. |
@@ -90,7 +90,7 @@ version and the cases you have open. Then: *"List the time steps, properties and
 
 ## Claude Desktop and Cowork
 
-1. `git clone https://github.com/hnil/resinsight-mcp` somewhere permanent.
+1. `git clone https://github.com/hnil/resinsight-live` somewhere permanent.
 2. Quit Claude completely with Cmd-Q — closing the window is not enough. The app rewrites its
    configuration file while it runs and would undo the change.
 3. Run `python3 <clone>/install_desktop.py`, then start Claude again.
@@ -104,7 +104,7 @@ yet.
 Claude Code's sandbox only restricts the commands Claude runs in its terminal. It does **not**
 restrict MCP servers such as this one, and file permission rules in Claude's settings do not
 apply to them either. The plugin therefore enforces its own limit through
-`RESINSIGHT_MCP_ALLOWED_DIRS`:
+`RESINSIGHT_LIVE_ALLOWED_DIRS`:
 
 - Every file or folder Claude asks ResInsight to open, load, import or export to must lie inside
   those folders (symbolic links are followed, so they cannot lead outside).
@@ -122,7 +122,7 @@ saved project refers to), and anything you do yourself in the ResInsight window.
 | "Could not find any ResInsight instances" | ResInsight is not running, or listens on another port | Start it (step 5); set `RESINSIGHT_GRPC_PORT` if you changed the port. |
 | A case in `Documents` fails to load, or "Path does not exist" | ResInsight was started from Finder or with `open` | Start the program as in step 5, or grant Documents access. |
 | An error about incompatible versions | `rips` and ResInsight differ in year/month | Set `RIPS_VERSION` (step 4) and restart Claude Code. |
-| "… is outside the allowed directories" | The file is not in `RESINSIGHT_MCP_ALLOWED_DIRS` | Add its folder to the setting, or move the run. |
+| "… is outside the allowed directories" | The file is not in `RESINSIGHT_LIVE_ALLOWED_DIRS` | Add its folder to the setting, or move the run. |
 | "ResInsight not found; set RESINSIGHT_EXECUTABLE" | Picture rendering cannot find the program | Set `RESINSIGHT_EXECUTABLE` (step 4). |
 | The tools do not show up | Claude Code was not restarted, or the server failed to start | Restart; check `claude mcp list`. |
 | Settings you added in Claude Desktop disappear | The file was edited while the app was running | Quit with Cmd-Q first (see *Claude Desktop and Cowork*). |
@@ -130,10 +130,14 @@ saved project refers to), and anything you do yourself in the ResInsight window.
 ## Updating and removing
 
 ```bash
-claude plugin marketplace update resinsight-tools
-claude plugin update resinsight@resinsight-tools
+claude plugin marketplace update hnil-reservoir-tools
+claude plugin update resinsight-live@hnil-reservoir-tools
 ```
 
-To remove it: `claude plugin uninstall resinsight@resinsight-tools`.
+To remove it: `claude plugin uninstall resinsight-live@hnil-reservoir-tools`.
+
+Coming from version 0.1 (`resinsight@resinsight-tools`)? Uninstall that, remove its marketplace
+(`claude plugin marketplace remove resinsight-tools`), then install as in step 3. Your old
+`~/.config/resinsight-mcp/env` is still read for now; rename the folder to `resinsight-live`.
 
 Works on macOS and Linux; Windows is not supported yet.

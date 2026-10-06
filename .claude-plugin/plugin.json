@@ -1,6 +1,6 @@
 {
-  "name": "resinsight",
-  "version": "0.1.0",
+  "name": "resinsight-live",
+  "version": "0.2.0",
   "description": "Watch and drive a running ResInsight, and render pictures and plots of reservoir simulation runs.",
   "author": {
     "name": "Halvor M. Nilsen",

@@ -5,7 +5,7 @@ description: Make pictures of reservoir/geomechanics simulation results with Res
 
 # ResInsight pictures
 
-Use the `ri_render` tool of the `resinsight` MCP server. It launches a **private** ResInsight,
+Use the `ri_render` tool of the `resinsight-live` MCP server. It launches a **private** ResInsight,
 renders PNGs, closes it, and returns the images inline plus the folder they were written to.
 The user's own ResInsight session is not touched. (To look at what the user has open in their
 own ResInsight instead, use `ri_snapshot` / `ri_view`.)
