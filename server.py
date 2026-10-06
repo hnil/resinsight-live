@@ -672,18 +672,33 @@ def ri_set_cell_result(
     return _dumps(_view_state(_view(view.id)))
 
 
+def _run_info(path: str) -> Optional[Dict[str, Any]]:
+    """The run.json (opm-agentic provenance) of a run directory or of the dir holding path."""
+    p = Path(path).expanduser()
+    f = (p if p.is_dir() else p.parent) / "run.json"
+    try:
+        return json.loads(f.read_text())
+    except (OSError, ValueError):
+        return None
+
+
 @mcp.tool()
 @_guard
 def ri_open(path: str, create_view: bool = True) -> str:
-    """Open a ResInsight project (.rsp) or load a case (.EGRID/.GRID/.ODB) into the current project."""
+    """Open a ResInsight project (.rsp), or load a case (.EGRID/.GRID/.ODB, or a run directory)."""
     _check_path(path, "ri_open")
     proj = _project()
     _S["cellinfo"].clear()
     if path.lower().endswith(".rsp"):
         proj.open(path)
         return ri_status()
+    run = _run_info(path)
+    if Path(path).is_dir():
+        path = str(_render.find_grid(path))
     case = proj.load_case(path)
     out = {"loaded": path, "case_id": case.id, "name": case.name}
+    if run:
+        out["run"] = run
     if create_view:
         out["view_id"] = case.create_view().id
     return _dumps(out)
@@ -773,7 +788,8 @@ def ri_render(
 ):
     """Pictures of a simulation run, rendered by a private ResInsight that is closed afterwards.
 
-    The user's interactive ResInsight is not touched. case: run dir, .DATA or .EGRID.
+    The user's interactive ResInsight is not touched. case: run dir, .DATA or .EGRID; a run.json
+    beside it is reported and copied to out/source_run.json.
     properties: 'TEMP,PRESSURE'; steps: 'first,last', 'all' or '0,5,last'.
     slice_spec: 'j=6' or 'k=10:14' (1-based) to see inside the grid; camera: top|front|side|oblique
     (default follows the slice). vectors: summary plots, 'WBHP:B-3H,FOPR'. template: an .rsp
@@ -796,6 +812,10 @@ def ri_render(
         case, out, properties, steps, vectors, slice_spec, camera, zscale, template
     )
     listing = f"{len(files)} image(s) in {out}:\n" + "\n".join(f.name for f in files)
+    run = _run_info(case)
+    if run:
+        (Path(out) / "source_run.json").write_text(json.dumps(run, indent=2) + "\n")
+        listing = f"run: {json.dumps(run)}\n" + listing
     return [listing, *(Image(path=str(f)) for f in files[:max_images])]
 
 
