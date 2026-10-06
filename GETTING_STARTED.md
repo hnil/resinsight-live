@@ -119,7 +119,8 @@ saved project refers to), and anything you do yourself in the ResInsight window.
 
 | What you see | Likely cause | What to do |
 |---|---|---|
-| "Could not find any ResInsight instances" | ResInsight is not running, or listens on another port | Start it (step 5); set `RESINSIGHT_GRPC_PORT` if you changed the port. |
+| "several ResInsight instances answer" | More than one ResInsight is running | Tell Claude which port to use, or set `RESINSIGHT_GRPC_PORT`. |
+| "Could not find any ResInsight" | ResInsight is not running, or listens on another port | Start it (step 5); set `RESINSIGHT_GRPC_PORT` if you changed the port. |
 | A case in `Documents` fails to load, or "Path does not exist" | ResInsight was started from Finder or with `open` | Start the program as in step 5, or grant Documents access. |
 | An error about incompatible versions | `rips` and ResInsight differ in year/month | Set `RIPS_VERSION` (step 4) and restart Claude Code. |
 | "… is outside the allowed directories" | The file is not in `RESINSIGHT_LIVE_ALLOWED_DIRS` | Add its folder to the setting, or move the run. |

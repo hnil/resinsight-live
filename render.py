@@ -8,11 +8,66 @@ import math
 import os
 import re
 import shutil
+import socket
 import sys
 from pathlib import Path
 
+import grpc
 import rips
+import App_pb2_grpc
 import Commands_pb2 as Cmd  # importable once rips has put its generated dir on sys.path
+from Definitions_pb2 import Empty
+
+SCAN_PORTS = range(50051, 50071)  # what rips.Instance.find() and other clients scan
+
+
+def _answers(port: int) -> bool:
+    with socket.socket() as s:
+        s.settimeout(0.2)
+        if s.connect_ex(("localhost", port)) != 0:
+            return False
+    channel = grpc.insecure_channel(f"localhost:{port}", options=[("grpc.enable_http_proxy", False)])
+    try:
+        App_pb2_grpc.AppStub(channel).GetVersion(Empty(), timeout=1)
+        return True
+    except grpc.RpcError:
+        return False
+    finally:
+        channel.close()
+
+
+def find_ports() -> list[int]:
+    """Ports in SCAN_PORTS where a ResInsight answers."""
+    return [p for p in SCAN_PORTS if _answers(p)]
+
+
+def connect(port: int = 0) -> rips.Instance:
+    """Attach to the given port, else $RESINSIGHT_GRPC_PORT, else the one ResInsight that answers.
+
+    Never guesses between several instances: one may belong to another server.
+    """
+    port = port or int(os.environ.get("RESINSIGHT_GRPC_PORT") or 0)
+    if not port:
+        ports = find_ports()
+        if not ports:
+            raise RuntimeError(f"Could not find any ResInsight on ports {SCAN_PORTS.start}-{SCAN_PORTS.stop - 1}")
+        if len(ports) > 1:
+            raise RuntimeError(
+                f"several ResInsight instances answer, on ports {ports}; pick one with "
+                "ri_status(port=...) or RESINSIGHT_GRPC_PORT"
+            )
+        port = ports[0]
+    return rips.Instance(port=port)
+
+
+def private_port() -> int:
+    """A free port outside SCAN_PORTS, so other clients' scans never attach to our instance."""
+    while True:
+        with socket.socket() as s:
+            s.bind(("localhost", 0))
+            port = s.getsockname()[1]
+        if port not in SCAN_PORTS:
+            return port
 
 
 def default_executable() -> str:
@@ -237,16 +292,14 @@ def render(
     if camera and camera not in CAMERAS:
         raise ValueError(f"camera must be one of {sorted(CAMERAS)}")
     if attach:
-        inst = rips.Instance.find()
-        if inst is None:
-            raise RuntimeError("no running ResInsight with gRPC found")
+        inst = connect()
     else:
         exe = exe or default_executable()
         if not exe:
             raise RuntimeError("ResInsight not found; set RESINSIGHT_EXECUTABLE to its binary")
         # a private instance keeps the user's interactive session untouched
         with quiet_child_stderr():
-            inst = rips.Instance.launch(resinsight_executable=exe, launch_port=0)
+            inst = rips.Instance.launch(resinsight_executable=exe, launch_port=private_port())
     try:
         proj = inst.project
         w, h = (int(x) for x in size.lower().split("x"))

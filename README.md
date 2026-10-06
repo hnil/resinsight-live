@@ -67,7 +67,7 @@ end to end.
 |---|---|
 | `RESINSIGHT_EXECUTABLE` | ResInsight binary used by `ri_render` / `render.py`. Default: `/Applications/ResInsight.app`, `~/Applications/ResInsight.app`, or `ResInsight` on `PATH`. |
 | `RIPS_VERSION` | Pin `rips` to your ResInsight version. |
-| `RESINSIGHT_GRPC_PORT` | Port of the running ResInsight (default: search 50051–50071). |
+| `RESINSIGHT_GRPC_PORT` | Port of the ResInsight to drive. Default: the one answering on 50051–50070; with several, `ri_status` lists them and you pick one with `ri_status(port=…)`. |
 | `RESINSIGHT_LIVE_PYTHON` | Python used to create the environment (default `python3`). |
 | `RESINSIGHT_LIVE_VENV` | Where that environment lives. |
 | `RESINSIGHT_LIVE_ALLOWED_DIRS` | Directories (separated by `:`) the server may read or write; see below. Unset: no limit. |
@@ -122,6 +122,9 @@ it in System Settings → Privacy & Security, and then cannot load cases stored 
 - The server keeps no state of its own except `ri_watch`'s baseline, so each client sees
   changes since *its own* last call.
 - Default ids of `-1` mean "the first case/view"; id `0` is a real id.
+- The server never closes or resizes the ResInsight it drives (`closeProject` is refused).
+  `ri_render`'s private instance listens on a port outside 50051–50070, so other clients'
+  scans never attach to it.
 
 ## Implementation notes
 

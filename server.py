@@ -24,6 +24,8 @@ from mcp.server.mcpserver import MCPServer, Image
 import rips
 import Commands_pb2
 
+import render as _render
+
 mcp = MCPServer(
     "resinsight-live",
     instructions=(
@@ -40,13 +42,12 @@ _S: Dict[str, Any] = {"inst": None, "port": None, "watch": None, "cellinfo": {}}
 # --------------------------------------------------------------------------- connection
 
 
-def _inst() -> rips.Instance:
-    inst = _S["inst"]
-    if inst is None:
-        inst = rips.Instance.find()
+def _inst(port: int = 0) -> rips.Instance:
+    if port or _S["inst"] is None:
+        inst = _render.connect(port)
         _S["inst"] = inst
-        _S["port"] = getattr(inst, "port", None) or os.environ.get("RESINSIGHT_GRPC_PORT")
-    return inst
+        _S["port"] = inst.port
+    return _S["inst"]
 
 
 def _project():
@@ -150,7 +151,10 @@ _EXPORT_TARGET = {
     "exportSnapshots": "exportFolder",
     "exportWellLogPlotData": "exportFolder",
 }
-_BLOCKED_COMMANDS = {"runOctaveScript": "it runs arbitrary Octave code"}
+_BLOCKED_COMMANDS = {
+    "runOctaveScript": "it runs arbitrary Octave code",
+    "closeProject": "this server did not start this ResInsight; close it from the GUI",
+}
 _PATHISH = re.compile(r"path|file|folder|dir", re.IGNORECASE)
 
 
@@ -359,16 +363,16 @@ def _diff(old: Dict[str, Any], new: Dict[str, Any]) -> List[str]:
 def ri_status(port: int = 0) -> str:
     """Connect to (or check) the running ResInsight instance and summarise the project.
 
-    port: 0 = search ports 50051-50070 (or $RESINSIGHT_GRPC_PORT), otherwise use this port.
+    port: 0 = $RESINSIGHT_GRPC_PORT, else the one ResInsight answering on 50051-50070
+    (several answering is an error listing them); otherwise use this port.
+    owned is always false: this server never starts, closes or resizes the instance it drives.
     """
-    if port:
-        _S["inst"] = rips.Instance(port=port)
-        _S["port"] = port
-    inst = _inst()
+    inst = _inst(port)
     proj = inst.project
     return _dumps(
         {
             "port": _S["port"],
+            "owned": False,
             "resinsight_version": inst.version_string(),
             "client_version": inst.client_version_string(),
             "project_file": getattr(proj, "project_file_path", ""),
@@ -743,7 +747,6 @@ def ri_summary_plot(address: str, summary_case_id: int = -1) -> str:
     if not coll:
         raise RuntimeError("no SummaryPlotCollection in the project")
     coll[0].new_summary_plot(summary_cases=[c], address=address)
-    _project()._execute_command(setPlotWindowSize=Commands_pb2.SetWindowSizeParams(width=1600, height=900))
     return _dumps(
         {
             "plotted": address,
@@ -779,8 +782,6 @@ def ri_render(
     """
     import datetime
     import tempfile
-
-    import render as _render
 
     _check_path(case, "ri_render case")
     for value, what in ((out, "ri_render out"), (template, "ri_render template")):
