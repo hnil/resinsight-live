@@ -144,7 +144,7 @@ Things that were not obvious when building this:
 
 ## Related projects
 
-[LukasMosser/resinsight-mcp](https://github.com/LukasMosser/resinsight-mcp) is an independent
+resinsight-mcp by Lukas Mosser is an independent
 ResInsight MCP server. Both can be installed together: names, environments and caches differ,
 and each should drive its own ResInsight instance.
 
