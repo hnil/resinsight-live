@@ -54,23 +54,36 @@ def _project():
     return _inst().project
 
 
+def _all_cases(proj) -> List[Any]:
+    """Grid cases, and geomechanical cases when rips knows them."""
+    cases = list(proj.cases())
+    geomech = getattr(rips, "GeoMechCase", None)
+    if geomech is not None:
+        cases += proj.descendants(geomech)
+    return cases
+
+
+def _is_geomech(obj) -> bool:
+    classes = getattr(rips, "GeoMechView", None), getattr(rips, "GeoMechCase", None)
+    return any(c is not None and isinstance(obj, c) for c in classes)
+
+
 def _case(case_id: int = -1):
-    proj = _project()
+    cases = _all_cases(_project())
+    if not cases:
+        raise ValueError("no case loaded in ResInsight")
     if case_id < 0:
-        cases = proj.cases()
-        if not cases:
-            raise ValueError("no case loaded in ResInsight")
         return cases[0]
-    c = proj.case(case_id)
-    if c is None:
-        raise ValueError(f"no case with id {case_id} (loaded: {[x.id for x in proj.cases()]})")
-    return c
+    for c in cases:
+        if c.id == case_id:
+            return c
+    raise ValueError(f"no case with id {case_id} (loaded: {[x.id for x in cases]})")
 
 
 def _case_with_selection(case_id: int = -1):
     """The case the user picked in, when no id is given."""
     if case_id < 0:
-        for c in _project().cases():
+        for c in _all_cases(_project()):
             try:
                 if c.selected_cells():
                     return c
@@ -239,6 +252,14 @@ def _cell_result_of(view) -> Dict[str, Any]:
         cr = view.cell_result()
     except Exception:
         return {}
+    if cr is None:
+        return {}
+    if _is_geomech(view):
+        return {
+            "result_position": getattr(cr, "result_position_type", None),
+            "result_field": getattr(cr, "result_field_name", None),
+            "result_component": getattr(cr, "result_component_name", None),
+        }
     return {
         "result_type": getattr(cr, "result_type", None),
         "result_variable": getattr(cr, "result_variable", None),
@@ -277,7 +298,7 @@ def _view_state(view) -> Dict[str, Any]:
 def _snapshot_state() -> Dict[str, Any]:
     proj = _project()
     cases = {}
-    for c in proj.cases():
+    for c in _all_cases(proj):
         try:
             steps = c.time_steps()
             cases[str(c.id)] = {
@@ -394,7 +415,7 @@ def ri_overview() -> str:
     """Full picture of the loaded model: cases, grid sizes, time steps, views and their results."""
     proj = _project()
     cases = []
-    for c in proj.cases():
+    for c in _all_cases(proj):
         entry: Dict[str, Any] = {"id": c.id, "name": c.name, "type": type(c).__name__}
         try:
             grids = c.grids()
@@ -664,11 +685,27 @@ def ri_set_time_step(time_step: int, view_id: int = -1) -> str:
 @mcp.tool()
 @_guard
 def ri_set_cell_result(
-    result_variable: str, view_id: int = -1, result_type: str = "DYNAMIC_NATIVE"
+    result_variable: str, view_id: int = -1, result_type: str = "DYNAMIC_NATIVE", component: str = ""
 ) -> str:
-    """Show a different property in a 3D view (the user sees this happen)."""
+    """Show a different property in a 3D view (the user sees this happen).
+
+    Geomechanical views: result_type is the position (NODAL, ELEMENT_NODAL, INTEGRATION_POINT,
+    ELEMENT; anything else means ELEMENT_NODAL), result_variable the field (SE, ST, S, E, NE,
+    POR-Bar, U, S_VTK, ...) and component e.g. S1, S11, U3; "SE:S1" works too.
+    """
     view = _view(view_id)
-    view.apply_cell_result(result_type, result_variable)
+    if _is_geomech(view):
+        field, _, comp = result_variable.partition(":")
+        cr = view.cell_result()
+        if cr is None or not hasattr(cr, "result_field_name"):
+            raise ValueError("this ResInsight cannot script geomechanical results (needs a 2026.9+ build)")
+        positions = ("NODAL", "ELEMENT_NODAL", "INTEGRATION_POINT", "ELEMENT")
+        cr.result_position_type = result_type if result_type in positions else "ELEMENT_NODAL"
+        cr.result_field_name = field
+        cr.result_component_name = component or comp
+        cr.update()
+    else:
+        view.apply_cell_result(result_type, result_variable)
     return _dumps(_view_state(_view(view.id)))
 
 
@@ -685,7 +722,8 @@ def _run_info(path: str) -> Optional[Dict[str, Any]]:
 @mcp.tool()
 @_guard
 def ri_open(path: str, create_view: bool = True) -> str:
-    """Open a ResInsight project (.rsp), or load a case (.EGRID/.GRID/.ODB, or a run directory)."""
+    """Open a ResInsight project (.rsp), or load a case (.EGRID/.GRID, a run directory, or a
+    geomechanical case: .pvd from OPM Flow's VTK output, .odb, .inp)."""
     _check_path(path, "ri_open")
     proj = _project()
     _S["cellinfo"].clear()
@@ -696,11 +734,15 @@ def ri_open(path: str, create_view: bool = True) -> str:
     if Path(path).is_dir():
         path = str(_render.find_grid(path))
     case = proj.load_case(path)
-    out = {"loaded": path, "case_id": case.id, "name": case.name}
+    if case is None:
+        raise ValueError(f"ResInsight loaded {path}, but this rips cannot return the case (needs a 2026.9+ build)")
+    out = {"loaded": path, "case_id": case.id, "name": case.name, "type": type(case).__name__}
     if run:
         out["run"] = run
     if create_view:
-        out["view_id"] = case.create_view().id
+        # a geomechanical case opens with a view of its own
+        views = case.descendants(rips.View) if _is_geomech(case) else []
+        out["view_id"] = views[0].id if views else case.create_view().id
     return _dumps(out)
 
 

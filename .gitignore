@@ -2,3 +2,4 @@
 __pycache__/
 *.pyc
 .ri_export_tmp/
+.venv-*/

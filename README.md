@@ -34,6 +34,21 @@ steps and cameras, and to read the images before describing them.
   launcher installs the newest one; for an older ResInsight set `RIPS_VERSION`, e.g.
   `RIPS_VERSION=2026.6.1.1`.
 
+## Geomechanics
+
+`ri_open` also loads geomechanical cases (OPM Flow's VTK output `.pvd`, `.odb`, `.inp`), and
+`ri_set_cell_result` sets their results, e.g. `result_variable="SE:S1",
+result_type="ELEMENT_NODAL"`. Loading an EGRID also imports the `<CASE>*.pvd` surfaces beside it
+(fractures). This needs a ResInsight with
+[hnil/ResInsight `geomech-work`](https://github.com/hnil/ResInsight/tree/geomech-work) (until its
+pull requests are merged) and a `rips` built from the same source:
+
+    python3 -m venv ~/rips-dev && ~/rips-dev/bin/pip install "mcp>=2,<3" -e <ResInsight>/GrpcInterface/Python
+
+then `RESINSIGHT_LIVE_VENV=~/rips-dev` and `RESINSIGHT_EXECUTABLE=<build>/ResInsight.app/Contents/MacOS/ResInsight`
+in `~/.config/resinsight-live/env`. For OPM Flow, run with `--enable-vtk-output=true
+--vtk-write-geo-mech-nodal=true` so the pore pressure and the cells' IJK are in the files.
+
 ## Install
 
 **Claude Code**
