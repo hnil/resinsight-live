@@ -38,7 +38,9 @@ steps and cameras, and to read the images before describing them.
 
 `ri_open` also loads geomechanical cases (OPM Flow's VTK output `.pvd`, `.odb`, `.inp`), and
 `ri_set_cell_result` sets their results, e.g. `result_variable="SE:S1",
-result_type="ELEMENT_NODAL"`. Loading an EGRID also imports the `<CASE>*.pvd` surfaces beside it
+result_type="ELEMENT_NODAL"`. `ri_properties`, `ri_property_stats` and `ri_cell_values` take the
+position as property type (`GEOMECH_ELEMENT_NODAL` by default, `GEOMECH_NODAL`, `GEOMECH_ELEMENT`, …)
+and give one value per element; `ri_time_steps` lists the step names. Loading an EGRID also imports the `<CASE>*.pvd` surfaces beside it
 (fractures). This needs a ResInsight with
 [hnil/ResInsight `geomech-work`](https://github.com/hnil/ResInsight/tree/geomech-work) (until its
 pull requests are merged) and a `rips` built from the same source:

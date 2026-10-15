@@ -68,6 +68,22 @@ def _is_geomech(obj) -> bool:
     return any(c is not None and isinstance(obj, c) for c in classes)
 
 
+def _time_step_labels(case) -> List[str]:
+    """Dates as yyyy-mm-dd, or the step names of a geomechanical case (its steps need not be dates)."""
+    steps = case.time_steps()
+    if steps:
+        return [f"{d.year:04d}-{d.month:02d}-{d.day:02d}" for d in steps]
+    names = getattr(case, "time_step_names", None)
+    return list(names()) if names else []
+
+
+def _property_type(case, property_type: str) -> str:
+    """Geomechanical results are addressed by position; default to element-nodal."""
+    if _is_geomech(case) and not property_type.startswith("GEOMECH_"):
+        return "GEOMECH_ELEMENT_NODAL"
+    return property_type
+
+
 def _case(case_id: int = -1):
     cases = _all_cases(_project())
     if not cases:
@@ -284,12 +300,11 @@ def _view_state(view) -> Dict[str, Any]:
         case = view.case()
         st["case_id"] = case.id
         st["case_name"] = case.name
-        steps = case.time_steps()
+        labels = _time_step_labels(case)
         i = st.get("current_time_step", 0)
-        if 0 <= i < len(steps):
-            d = steps[i]
-            st["date"] = f"{d.year:04d}-{d.month:02d}-{d.day:02d}"
-        st["time_step_count"] = len(steps)
+        if 0 <= i < len(labels):
+            st["time_step_name" if _is_geomech(view) else "date"] = labels[i]
+        st["time_step_count"] = len(labels)
     except Exception:
         pass
     return st
@@ -300,11 +315,10 @@ def _snapshot_state() -> Dict[str, Any]:
     cases = {}
     for c in _all_cases(proj):
         try:
-            steps = c.time_steps()
             cases[str(c.id)] = {
                 "name": c.name,
                 "class": type(c).__name__,
-                "time_steps": len(steps),
+                "time_steps": len(_time_step_labels(c)),
                 "selected_cells": [
                     [s.grid_index, s.ijk.i, s.ijk.j, s.ijk.k] for s in c.selected_cells()
                 ],
@@ -425,11 +439,11 @@ def ri_overview() -> str:
             ]
             entry["active_cells"] = c.cell_count().active_cell_count
             entry["reservoir_cells"] = c.cell_count().reservoir_cell_count
-            steps = c.time_steps()
-            entry["time_steps"] = len(steps)
-            if steps:
-                entry["first_date"] = f"{steps[0].year:04d}-{steps[0].month:02d}-{steps[0].day:02d}"
-                entry["last_date"] = f"{steps[-1].year:04d}-{steps[-1].month:02d}-{steps[-1].day:02d}"
+            labels = _time_step_labels(c)
+            entry["time_steps"] = len(labels)
+            if labels:
+                entry["first_step"] = labels[0]
+                entry["last_step"] = labels[-1]
         except Exception as exc:
             entry["warning"] = str(exc)
         cases.append(entry)
@@ -566,19 +580,19 @@ def ri_properties(case_id: int = -1, property_type: str = "DYNAMIC_NATIVE") -> s
     """List result properties available on a case.
 
     property_type: DYNAMIC_NATIVE | STATIC_NATIVE | GENERATED | INPUT_PROPERTY | SOURSIMRL |
-    FORMATION_NAMES | FLOW_DIAGNOSTICS | INJECTION_FLOODING
+    FORMATION_NAMES | FLOW_DIAGNOSTICS | INJECTION_FLOODING; for geomechanical cases the position
+    GEOMECH_NODAL | GEOMECH_ELEMENT_NODAL (default) | GEOMECH_INTEGRATION_POINT | GEOMECH_ELEMENT,
+    with names "FIELD:COMPONENT" (e.g. "SE:S1", "POR-Bar").
     """
-    return _dumps(sorted(_case(case_id).available_properties(property_type)))
+    case = _case(case_id)
+    return _dumps(sorted(case.available_properties(_property_type(case, property_type))))
 
 
 @mcp.tool()
 @_guard
 def ri_time_steps(case_id: int = -1) -> str:
-    """Time steps of a case as index -> date."""
-    steps = _case(case_id).time_steps()
-    return _dumps(
-        {i: f"{d.year:04d}-{d.month:02d}-{d.day:02d}" for i, d in enumerate(steps)}
-    )
+    """Time steps of a case as index -> date (step name for geomechanical cases)."""
+    return _dumps(dict(enumerate(_time_step_labels(_case(case_id)))))
 
 
 @mcp.tool()
@@ -591,9 +605,13 @@ def ri_property_stats(
 ) -> str:
     """Statistics (min/max/mean/percentiles) of a property over the active cells at one time step.
 
-    Use this instead of pulling whole arrays: it is one number set per call.
+    Use this instead of pulling whole arrays: it is one number set per call. Geomechanical cases:
+    one value per element (the mean over its nodes for nodal and element-nodal results); see
+    ri_properties for the property types and names.
     """
-    vals = [v for v in _case(case_id).active_cell_property(property_type, property_name, time_step)]
+    case = _case(case_id)
+    property_type = _property_type(case, property_type)
+    vals = [v for v in case.active_cell_property(property_type, property_name, time_step)]
     finite = [v for v in vals if v == v and abs(v) < 1e29]
     if not finite:
         return _dumps({"property": property_name, "count": len(vals), "note": "no finite values"})
@@ -640,8 +658,12 @@ def ri_cell_values(
     time_step: int = 0,
     grid_index: int = 0,
 ) -> str:
-    """Value of a property in specific cells. cells = [[i,j,k], ...], 1-based as in the GUI."""
+    """Value of a property in specific cells. cells = [[i,j,k], ...], 1-based as in the GUI.
+
+    Geomechanical cases: grid_index is the part, values per element as in ri_property_stats.
+    """
     case = _case(case_id)
+    property_type = _property_type(case, property_type)
     imap = _cell_index_map(case)
     vals = case.active_cell_property(property_type, property_name, time_step)
     out = []
