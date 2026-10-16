@@ -86,6 +86,8 @@ CAMERAS = {
     "oblique": (1.0, 1.2, -0.8),
 }
 SLICE_CAMERA = {"i": "side", "j": "front", "k": "top"}
+# where a geomechanical result is looked up when the property does not name a position
+GEOMECH_POSITIONS = ("ELEMENT_NODAL", "NODAL", "ELEMENT", "INTEGRATION_POINT")
 
 
 def find_grid(path: str) -> Path:
@@ -100,6 +102,20 @@ def find_grid(path: str) -> Path:
         if cand.exists():
             return cand
     raise ValueError(f"no .EGRID/.GRID next to {p}")
+
+
+def find_case(path: str, geomech: bool = False) -> tuple[Path, bool]:
+    """The grid to load, or a geomechanical .pvd: given directly, or the one beside the grid."""
+    p = Path(path).expanduser().resolve()
+    if p.suffix.lower() == ".pvd":
+        return p, True
+    grid = find_grid(path)
+    if not geomech:
+        return grid, False
+    pvd = grid.with_suffix(".pvd")
+    if not pvd.exists():
+        raise ValueError(f"no {pvd.name} beside {grid.name}; run OPM Flow with --enable-vtk-output=true")
+    return pvd, True
 
 
 def parse_steps(spec: str, n: int) -> list[int]:
@@ -133,11 +149,19 @@ def look_at(forward, dist: float) -> list[float]:
     return [*r, 0.0, *u, 0.0, -f[0], -f[1], -f[2], -dist, 0.0, 0.0, 0.0, 1.0]
 
 
-def add_slice(proj, case, slice_spec: str, tmp: Path):
+def grid_dimensions(case, geomech: bool) -> tuple[int, int, int]:
+    if not geomech:
+        dims = case.grids()[0].dimensions()
+        return dims.i, dims.j, dims.k
+    ijk = [(c.local_ijk.i, c.local_ijk.j, c.local_ijk.k) for c in case.cell_info_for_active_cells()]
+    return tuple(max(v[a] for v in ijk) + 1 for a in range(3))
+
+
+def add_slice(proj, case, slice_spec: str, tmp: Path, geomech: bool = False):
     """Range filters cannot be created over gRPC, so write one into a saved project and reopen it."""
     axis, start, count = parse_slice(slice_spec)
-    dims = case.grids()[0].dimensions()
-    rng = {"i": (1, dims.i), "j": (1, dims.j), "k": (1, dims.k)}
+    ni, nj, nk = grid_dimensions(case, geomech)
+    rng = {"i": (1, ni), "j": (1, nj), "k": (1, nk)}
     rng[axis] = (start, count)
     rsp = tmp / "sliced.rsp"
     proj.save(str(rsp))
@@ -156,7 +180,7 @@ def add_slice(proj, case, slice_spec: str, tmp: Path):
     )
     rsp.write_text(text.replace("<CellFilters/>", xml))
     proj.open(str(rsp))
-    return proj.cases()[0], axis
+    return (proj.descendants(rips.GeoMechCase)[0] if geomech else proj.cases()[0]), axis
 
 
 def result_type(case, prop: str) -> str:
@@ -169,6 +193,16 @@ def result_type(case, prop: str) -> str:
     raise ValueError(f"property {prop} not in case; use --list to see what is available")
 
 
+def geomech_result(case, prop: str) -> tuple[str, str, str]:
+    """'SE:S1', 'POR-Bar' or 'NODAL/POR-Bar' -> (position, field, component)."""
+    position, _, name = prop.rpartition("/")
+    for pos in [position.upper()] if position else GEOMECH_POSITIONS:
+        if name in case.available_properties("GEOMECH_" + pos):
+            field, _, component = name.partition(":")
+            return pos, field, component
+    raise ValueError(f"{prop} not in the geomechanical case; use --list to see what is available")
+
+
 def move_export(tmp: Path, dest: Path) -> Path:
     # ResInsight names exports itself; take the newest image and give it a predictable name
     files = sorted((f for f in tmp.iterdir() if f.suffix.lower() == ".png"), key=os.path.getmtime)
@@ -178,7 +212,7 @@ def move_export(tmp: Path, dest: Path) -> Path:
     return dest
 
 
-def render_views(case, props, steps_spec, zscale, camera, label, out: Path, tmp: Path) -> list[Path]:
+def render_views(case, props, steps_spec, zscale, camera, label, out: Path, tmp: Path, size=(-1, -1)) -> list[Path]:
     written = []
     times = case.time_steps()
     views = case.views()
@@ -201,7 +235,35 @@ def render_views(case, props, steps_spec, zscale, camera, label, out: Path, tmp:
                 d = times[step]
                 tag = f"_view{vi}" if len(views) > 1 else ""
                 name = f"{case.name}{tag}{label}_{prop}_step{step:03d}_{d.year:04d}-{d.month:02d}-{d.day:02d}.png"
-                view.export_snapshot(export_folder=str(tmp))
+                view.export_snapshot(export_folder=str(tmp), width=size[0], height=size[1])
+                written.append(move_export(tmp, out / name))
+    return written
+
+
+def render_geomech_views(case, props, steps_spec, zscale, camera, label, out: Path, tmp: Path, size=(-1, -1)) -> list[Path]:
+    written = []
+    names = case.time_step_names()
+    views = case.views()
+    for vi, view in enumerate(views):
+        if zscale:
+            view.grid_z_scale = zscale
+        if camera:
+            view.camera_matrix = look_at(CAMERAS[camera], -view.camera_matrix[11] * 1.1)
+        if zscale or camera:
+            view.update()
+        for prop in props:
+            position, field, component = geomech_result(case, prop)
+            result = view.cell_result()
+            result.result_position_type = position
+            result.result_field_name = field
+            result.result_component_name = component
+            result.update()
+            for step in parse_steps(steps_spec, len(names)):
+                view.set_time_step(step)
+                tag = f"_view{vi}" if len(views) > 1 else ""
+                prop_tag = f"{field}-{component}" if component else field
+                name = f"{case.name}{tag}{label}_{prop_tag}_step{step:03d}.png"
+                view.export_snapshot(export_folder=str(tmp), width=size[0], height=size[1])
                 written.append(move_export(tmp, out / name))
     return written
 
@@ -239,6 +301,22 @@ def render_summary(proj, grid: Path, vectors, out: Path, tmp: Path) -> list[Path
         page.export_snapshot(export_folder=str(tmp))
         written.append(move_export(tmp, out / f"{grid.stem}_{vec.replace(':', '_')}.png"))
     return written
+
+
+def describe_geomech(case, proj, pvd: Path) -> str:
+    ni, nj, nk = grid_dimensions(case, True)
+    lines = [f"geomechanical case {case.name}  ({pvd})"]
+    lines.append(f"  elements: {case.cell_count().active_cell_count}, IJK {ni} x {nj} x {nk}")
+    for i, name in enumerate(case.time_step_names()):
+        lines.append(f"  step {i}: {name}")
+    for pos in GEOMECH_POSITIONS:
+        lines.append(f"  {pos}: {' '.join(sorted(case.available_properties('GEOMECH_' + pos)))}")
+    try:
+        addrs = sorted(summary_case(proj, pvd).available_addresses().values)
+        lines.append(f"  summary: {len(addrs)} vectors")
+    except ValueError:
+        lines.append("  summary: none")
+    return "\n".join(lines)
 
 
 def describe(case, proj, grid: Path) -> str:
@@ -286,9 +364,12 @@ def render(
     list_only: bool = False,
     attach: bool = False,
     exe: str = "",
+    geomech: bool = False,
 ):
     """Returns the written PNG paths, or the case description when list_only."""
-    grid = find_grid(case_path)
+    grid, geomech = find_case(case_path, geomech)
+    if geomech and template:
+        raise ValueError("templates are not supported for geomechanical cases")
     if camera and camera not in CAMERAS:
         raise ValueError(f"camera must be one of {sorted(CAMERAS)}")
     if attach:
@@ -310,11 +391,15 @@ def render(
             proj.open(str(Path(template).expanduser().resolve()))
             case = proj.cases()[0]
             case.replace(str(grid))
+        elif geomech:
+            case = proj.load_case(str(grid))  # opens with a view of its own
+            if case is None or not hasattr(case, "time_step_names"):
+                raise RuntimeError("this ResInsight/rips cannot script geomechanical cases (needs a 2026.9+ build)")
         else:
             case = proj.load_case(str(grid))
             case.create_view()
         if list_only:
-            return describe(case, proj, grid)
+            return describe_geomech(case, proj, grid) if geomech else describe(case, proj, grid)
         if not out:
             raise ValueError("an output directory is required")
 
@@ -324,16 +409,19 @@ def render(
         tmp.mkdir(exist_ok=True)
         label = ""
         if slice_spec:
-            case, axis = add_slice(proj, case, slice_spec, tmp)
+            case, axis = add_slice(proj, case, slice_spec, tmp, geomech)
             camera = camera or SLICE_CAMERA[axis]
             label = "_" + slice_spec.replace("=", "").replace(":", "-")
         elif not template:
             camera = camera or "oblique"
 
         props = [p.strip() for p in properties.split(",") if p.strip()]
-        if not props and not template:
-            props = ["PRESSURE"]
-        written = render_views(case, props, steps, zscale, camera, label, out_dir, tmp)
+        if geomech:
+            written = render_geomech_views(case, props or ["U:U3"], steps, zscale, camera, label, out_dir, tmp, (w, h))
+        else:
+            if not props and not template:
+                props = ["PRESSURE"]
+            written = render_views(case, props, steps, zscale, camera, label, out_dir, tmp, (w, h))
         vecs = [v.strip() for v in vectors.split(",") if v.strip()]
         if vecs:
             written += render_summary(proj, grid, vecs, out_dir, tmp)
@@ -346,9 +434,13 @@ def render(
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("case", help="run directory, .DATA, or .EGRID")
+    ap.add_argument("case", help="run directory, .DATA, .EGRID, or a geomechanical .pvd")
     ap.add_argument("-o", "--out", help="output directory for the PNGs")
-    ap.add_argument("-p", "--properties", default="", help="comma list, e.g. PRESSURE,TEMP")
+    ap.add_argument(
+        "-p", "--properties", default="",
+        help="comma list, e.g. PRESSURE,TEMP; geomechanical: SE:S1,POR-Bar or NODAL/POR-Bar",
+    )
+    ap.add_argument("-g", "--geomech", action="store_true", help="render the run's geomechanical .pvd beside the grid")
     ap.add_argument("-s", "--steps", default="first,last", help="'all', or indices/first/last, e.g. 0,5,last")
     ap.add_argument("-v", "--vectors", default="", help="summary vectors, e.g. WBHP:B-3H,FOPR")
     ap.add_argument("--slice", default="", help="one IJK slice, 1-based: j=6, or k=10:14 for a slab")
@@ -363,7 +455,7 @@ def main() -> None:
     try:
         result = render(
             a.case, a.out or "", a.properties, a.steps, a.vectors, a.slice, a.camera,
-            a.zscale, a.template or "", a.size, a.list, a.attach, a.exe,
+            a.zscale, a.template or "", a.size, a.list, a.attach, a.exe, a.geomech,
         )
     except (ValueError, RuntimeError, rips.RipsError) as exc:
         sys.exit(f"error: {exc}")

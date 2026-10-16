@@ -8,12 +8,14 @@ Read-mostly: the session observes the model and what the user is doing in the GU
 
 from __future__ import annotations
 
+import contextlib
 import glob
 import functools
 import json
 import os
 import re
 import statistics
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -849,11 +851,14 @@ def ri_render(
     out: str = "",
     max_images: int = 6,
     list_only: bool = False,
+    geomech: bool = False,
 ):
     """Pictures of a simulation run, rendered by a private ResInsight that is closed afterwards.
 
     The user's interactive ResInsight is not touched. case: run dir, .DATA or .EGRID; a run.json
-    beside it is reported and copied to out/source_run.json.
+    beside it is reported and copied to out/source_run.json. Geomechanical results: case = the
+    .pvd of OPM Flow's VTK output, or geomech=True to take the one beside the grid; properties
+    'SE:S1,ST:S33,POR-Bar,U:U3' (position found automatically, or 'NODAL/POR-Bar').
     properties: 'TEMP,PRESSURE'; steps: 'first,last', 'all' or '0,5,last'.
     slice_spec: 'j=6' or 'k=10:14' (1-based) to see inside the grid; camera: top|front|side|oblique
     (default follows the slice). vectors: summary plots, 'WBHP:B-3H,FOPR'. template: an .rsp
@@ -867,14 +872,17 @@ def ri_render(
     for value, what in ((out, "ri_render out"), (template, "ri_render template")):
         if value:
             _check_path(value, what)
+    # rips prints to stdout, which is the MCP channel under stdio
     if list_only:
-        return _render.render(case, list_only=True)
+        with contextlib.redirect_stdout(sys.stderr):
+            return _render.render(case, list_only=True, geomech=geomech)
     if not out:
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         out = str(Path(tempfile.gettempdir()) / "resinsight_renders" / f"{Path(case).stem}_{stamp}")
-    files = _render.render(
-        case, out, properties, steps, vectors, slice_spec, camera, zscale, template
-    )
+    with contextlib.redirect_stdout(sys.stderr):
+        files = _render.render(
+            case, out, properties, steps, vectors, slice_spec, camera, zscale, template, geomech=geomech
+        )
     listing = f"{len(files)} image(s) in {out}:\n" + "\n".join(f.name for f in files)
     run = _run_info(case)
     if run:
