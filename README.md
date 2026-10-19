@@ -12,12 +12,23 @@ reservoir simulation runs without touching the GUI.
   `ri_property_stats`, `ri_cell_values`, `ri_time_steps`, `ri_wells`, `ri_summary_cases`,
   `ri_summary_values`.
 - **Drive the view.** `ri_open`, `ri_create_view`, `ri_set_time_step`, `ri_set_cell_result`,
-  `ri_summary_plot`, and `ri_execute_command` for anything else in ResInsight's command API.
+  `ri_slice`, `ri_camera`, `ri_summary_plot`, and `ri_execute_command` for anything else in
+  ResInsight's command API.
 - **Render pictures of a run.** `ri_render` starts a private ResInsight, writes PNGs (properties
   at chosen steps, IJK slices, camera presets, summary plots), closes it and returns the images
   inline. The same renderer is a command-line tool, `render.py`.
 
 New users: start with [GETTING_STARTED.md](GETTING_STARTED.md).
+
+### Slices in the live view
+
+`ri_slice(slice_spec="j=44", view_id=0)` shows only that slice in the user's view, and turns the
+camera square onto it from the grid's own orientation (corner-point grids are seldom aligned with
+north). A range filter made over gRPC is not tied to its case and shows nothing, so `ri_slice`
+saves the project to a temporary file, writes the filter there and reopens it. Every view keeps
+its result and time step; the project then lives in the temporary file, so save it elsewhere from
+the GUI to keep it. `ri_camera("top")` or `ri_camera("0.76,0.65,-0.2")` (east, north, up) points a
+view without slicing. `ri_open` also takes a `.GRDECL` grid with its properties.
 
 The plugin also ships the `resinsight-pictures` skill, which tells Claude how to choose slices,
 steps and cameras, and to read the images before describing them.

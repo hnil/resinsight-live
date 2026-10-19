@@ -746,8 +746,9 @@ def _run_info(path: str) -> Optional[Dict[str, Any]]:
 @mcp.tool()
 @_guard
 def ri_open(path: str, create_view: bool = True) -> str:
-    """Open a ResInsight project (.rsp), or load a case (.EGRID/.GRID, a run directory, or a
-    geomechanical case: .pvd from OPM Flow's VTK output, .odb, .inp)."""
+    """Open a ResInsight project (.rsp), or load a case (.EGRID/.GRID, a run directory, a
+    .GRDECL grid with its properties, or a geomechanical case: .pvd from OPM Flow's VTK output,
+    .odb, .inp)."""
     _check_path(path, "ri_open")
     proj = _project()
     _S["cellinfo"].clear()
@@ -775,6 +776,91 @@ def ri_open(path: str, create_view: bool = True) -> str:
 def ri_create_view(case_id: int = -1) -> str:
     """Create a new 3D view on a case (needed before ri_snapshot if no view is open)."""
     return _dumps(_view_state(_case(case_id).create_view()))
+
+
+def _slice_filter_xml(name: str, rng: Dict[str, tuple]) -> str:
+    return (
+        "<CellRangeFilter><Name>" + name + "</Name><IsChecked>True</IsChecked>"
+        "<FilterType>INCLUDE</FilterType><GridIndex>0</GridIndex>"
+        + "".join(
+            f"<StartIndex{a.upper()}>{rng[a][0]}</StartIndex{a.upper()}><CellCount{a.upper()}>{rng[a][1]}</CellCount{a.upper()}>"
+            for a in "ijk"
+        )
+        + "</CellRangeFilter>"
+    )
+
+
+@mcp.tool()
+@_guard
+def ri_slice(slice_spec: str, view_id: int = -1, face_camera: bool = True) -> str:
+    """Show only an i, j or k slice in a live 3D view: 'j=44' or 'k=10:14' (1-based).
+
+    Replaces the view's range filters. A range filter made over gRPC is not tied to its case and
+    shows nothing, so the project is saved to a temporary file, the filter written into the view
+    there, and the project reopened; every view keeps its result and time step. Afterwards the
+    project lives in that temporary file; save it elsewhere from the GUI to keep it.
+    face_camera turns the camera square to the slice, from the grid's own orientation.
+    """
+    view = _view(view_id)
+    if _is_geomech(view):
+        raise ValueError("ri_slice works on grid cases; use ri_render with slice_spec for geomechanical cases")
+    axis, start, count = _render.parse_slice(slice_spec)
+    case = view.case()
+    ni, nj, nk = _render.grid_dimensions(case, False)
+    rng = {"i": (1, ni), "j": (1, nj), "k": (1, nk)}
+    rng[axis] = (start, count)
+    distance = -view.camera_matrix[11]
+
+    # Mark the view's filter collection, so the view can be found in the saved project.
+    marker = f"__ri_slice_{os.getpid()}_{int(time.time())}__"
+    coll = view.descendants(rips.generated.generated_classes.CellFilterCollection)[0]
+    tag = coll.add_new_object(rips.generated.generated_classes.CellRangeFilter)
+    tag.name = marker
+    tag.is_checked = False
+    tag.update()
+
+    proj = _project()
+    rsp = Path(tempfile.mkdtemp(prefix="ri_slice_")) / "sliced.rsp"
+    proj.save(str(rsp))
+    text = rsp.read_text()
+    m = text.find(f"<Name>{marker}</Name>")
+    a = text.rfind("<CellFilters>", 0, m)
+    b = text.find("</CellFilters>", m) + len("</CellFilters>")
+    if m < 0 or a < 0:
+        raise RuntimeError("could not find the view in the saved project")
+    text = text[:a] + "<CellFilters>" + _slice_filter_xml(f"slice {slice_spec}", rng) + "</CellFilters>" + text[b:]
+    if face_camera:
+        # Without a stored camera ResInsight frames the model on opening the view.
+        v0 = max(text.rfind("<EclipseView>", 0, a), text.rfind("<EclipseView ", 0, a))
+        head = re.sub(r"<CameraPosition>[^<]*</CameraPosition>|<CameraPointOfInterest>[^<]*</CameraPointOfInterest>",
+                      "", text[v0:a])
+        text = text[:v0] + head + text[a:]
+    rsp.write_text(text)
+    proj.open(str(rsp))
+    _S["cellinfo"].clear()
+    if face_camera:
+        target = _view(view.id)
+        frame = _render.slice_frame(case, axis, start, target.grid_z_scale)
+        if frame:
+            target.camera_matrix = _render.look_at_point(
+                _render.slice_direction(case, axis, start), frame[0], frame[1])
+            target.camera_point_of_interest = frame[0]
+            target.update()
+    out = _view_state(_view(view.id))
+    out["project_file"] = str(rsp)
+    return _dumps(out)
+
+
+@mcp.tool()
+@_guard
+def ri_camera(direction: str, view_id: int = -1) -> str:
+    """Point a live 3D view along a direction: top, front (looking north), side (looking east),
+    oblique, or 'x,y,z' with x east, y north, z up. The distance to the model is kept."""
+    view = _view(view_id)
+    view.camera_matrix = _render.look_at_point(
+        _render.camera_direction(direction), view.camera_point_of_interest, -view.camera_matrix[11])
+    view.update()
+    return _dumps(_view_state(_view(view.id)))
 
 
 def _summary_case(summary_case_id: int = -1):

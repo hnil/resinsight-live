@@ -22,8 +22,8 @@ own ResInsight instead, use `ri_snapshot` / `ri_view`.)
    Pick k where the effect is, not the top layer.
 3. Thin reservoirs need `zscale=5` (or more) to be readable in side views.
 4. `steps="first,last"` shows the change; `"all"` the evolution; or explicit indices.
-5. `camera` = `top|front|side|oblique` overrides the default, which follows the slice axis
-   (oblique when there is no slice).
+5. `camera` = `top|front|side|oblique` or `x,y,z` overrides the default. Without it a grid slice
+   is seen square on, from the grid's own orientation (oblique when there is no slice).
 6. `vectors="WBHP:<well>,WWIR:<well>"` adds summary plots, one vector per image.
 7. For a view set up by hand (several filters, colours, legends) the user can save an `.rsp`
    in ResInsight and pass it as `template`; its views are reused with the run swapped in.
@@ -66,3 +66,11 @@ present it. Describe what a picture shows with the numbers from that box, not ju
 - Geomechanical cases cannot use `template`.
 - On ResInsight 2026.9 development builds summary plots export nothing (an upstream change to the
   plot windows); 3D pictures are not affected.
+
+## Live view instead of pictures
+
+When the user has ResInsight open and wants to look at a section themselves, slice their view
+rather than rendering: `ri_slice(slice_spec="j=<j>", view_id=...)`, once per view when two models
+are shown side by side. It reopens the project from a temporary file (say so), keeps every view's
+result and time step, and faces the camera onto the slice. A model on another grid, for example a
+mechanics grid written as `.GRDECL`, is loaded with `ri_open`; translate the slice index to its IJK.

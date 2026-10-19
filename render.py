@@ -149,6 +149,84 @@ def look_at(forward, dist: float) -> list[float]:
     return [*r, 0.0, *u, 0.0, -f[0], -f[1], -f[2], -dist, 0.0, 0.0, 0.0, 1.0]
 
 
+def look_at_point(forward, point, dist: float) -> list[float]:
+    """As look_at, but centred on a point of the view's display coordinates."""
+    m = look_at(forward, dist)
+    rows = (m[0:3], m[4:7], m[8:11])
+    f = [-c for c in m[8:11]]
+    eye = [point[a] - f[a] * dist for a in range(3)]
+    for r in range(3):
+        m[4 * r + 3] = -sum(rows[r][a] * eye[a] for a in range(3))
+    return m
+
+
+def slice_frame(case, axis: str, start: int, zscale: float):
+    """Centre of a slice in the view's display coordinates, and a distance that fits it.
+
+    Display coordinates are world coordinates (z up) less the centre of the case's bounding box,
+    with z stretched by the view's z scale.
+    """
+    a = "ijk".index(axis)
+    pts = [
+        (c.x, c.y, -c.z)
+        for c, info in zip(case.active_cell_centers(), case.cell_info_for_active_cells())
+        if (info.local_ijk.i, info.local_ijk.j, info.local_ijk.k)[a] == start - 1
+    ]
+    if not pts:
+        return None
+    # ResInsight's offset is the centre of the main grid's box, inactive cells included.
+    allc = [(c.x, c.y, -c.z) for c in case.grids()[0].cell_centers() if math.isfinite(c.x) and (c.x or c.y)]
+    origin = tuple((min(p[d] for p in allc) + max(p[d] for p in allc)) / 2 for d in range(3))
+    centre = [sum(p[d] for p in pts) / len(pts) - origin[d] for d in range(3)]
+    centre[2] *= zscale
+    span_h = max(math.hypot(p[0] - q[0], p[1] - q[1]) for p in pts[:: max(1, len(pts) // 200)] for q in pts[:: max(1, len(pts) // 200)])
+    span_v = (max(p[2] for p in pts) - min(p[2] for p in pts)) * zscale
+    return centre, 1.8 * max(span_h, span_v, 1.0)
+
+
+def camera_direction(camera) -> tuple[float, float, float]:
+    """A name from CAMERAS, a direction tuple, or 'x,y,z' (east, north, up)."""
+    if isinstance(camera, (tuple, list)):
+        return tuple(float(c) for c in camera)
+    if camera in CAMERAS:
+        return CAMERAS[camera]
+    try:
+        parts = [float(c) for c in str(camera).split(",")]
+    except ValueError:
+        parts = []
+    if len(parts) != 3 or not any(parts):
+        raise ValueError(f"bad camera '{camera}': use {', '.join(CAMERAS)} or x,y,z")
+    return tuple(parts)
+
+
+def slice_direction(case, axis: str, start: int) -> tuple[float, float, float]:
+    """Look square onto an i- or j-slice, from the grid's own orientation.
+
+    Corner-point grids are seldom aligned with north, so a fixed camera can see a slice edge-on.
+    The slice's trend is the principal axis of its active cell centres.
+    """
+    if axis == "k":
+        return CAMERAS["top"]
+    a = "ij".index(axis)
+    pts = [
+        (c.x, c.y)
+        for c, info in zip(case.active_cell_centers(), case.cell_info_for_active_cells())
+        if (info.local_ijk.i, info.local_ijk.j)[a] == start - 1
+    ]
+    if len(pts) < 2:
+        return CAMERAS[SLICE_CAMERA[axis]]
+    mx = sum(p[0] for p in pts) / len(pts)
+    my = sum(p[1] for p in pts) / len(pts)
+    sxx = sum((p[0] - mx) ** 2 for p in pts)
+    syy = sum((p[1] - my) ** 2 for p in pts)
+    sxy = sum((p[0] - mx) * (p[1] - my) for p in pts)
+    theta = 0.5 * math.atan2(2 * sxy, sxx - syy)
+    fx, fy = -math.sin(theta), math.cos(theta)  # normal to the trend
+    if fy < 0 or (fy == 0 and fx < 0):
+        fx, fy = -fx, -fy
+    return (fx, fy, -0.15)
+
+
 def grid_dimensions(case, geomech: bool) -> tuple[int, int, int]:
     if not geomech:
         dims = case.grids()[0].dimensions()
@@ -221,7 +299,7 @@ def render_views(case, props, steps_spec, zscale, camera, label, out: Path, tmp:
         if zscale:
             view.grid_z_scale = zscale
         if camera:
-            view.camera_matrix = look_at(CAMERAS[camera], -view.camera_matrix[11] * 1.1)
+            view.camera_matrix = look_at(camera_direction(camera), -view.camera_matrix[11] * 1.1)
         if zscale or camera:
             view.update()
         current = view.cell_result()
@@ -248,7 +326,7 @@ def render_geomech_views(case, props, steps_spec, zscale, camera, label, out: Pa
         if zscale:
             view.grid_z_scale = zscale
         if camera:
-            view.camera_matrix = look_at(CAMERAS[camera], -view.camera_matrix[11] * 1.1)
+            view.camera_matrix = look_at(camera_direction(camera), -view.camera_matrix[11] * 1.1)
         if zscale or camera:
             view.update()
         for prop in props:
@@ -410,7 +488,8 @@ def render(
         label = ""
         if slice_spec:
             case, axis = add_slice(proj, case, slice_spec, tmp, geomech)
-            camera = camera or SLICE_CAMERA[axis]
+            if not camera:
+                camera = SLICE_CAMERA[axis] if geomech else slice_direction(case, axis, parse_slice(slice_spec)[1])
             label = "_" + slice_spec.replace("=", "").replace(":", "-")
         elif not template:
             camera = camera or "oblique"
