@@ -184,6 +184,48 @@ def slice_frame(case, axis: str, start: int, zscale: float):
     return centre, 1.8 * max(span_h, span_v, 1.0)
 
 
+def vtk_slice_frame(pvd: str, axis: str, start: int, zscale: float):
+    """Centre, fitting distance and facing direction of a slice of a geomechanical VTK case.
+
+    Read from its first .vtu (cell "ijk", 0-based). ResInsight's geomechanical display origin is
+    the low corner of the model's box, with z up and stretched by the view's z scale.
+    """
+    root = Path(pvd)
+    m = re.search(r'file="([^"]+)"', root.read_text())
+    if not m:
+        return None
+    text = (root.parent / m.group(1)).read_text()
+
+    def array(name):
+        hit = re.search(r'Name="%s"[^>]*>(.*?)</DataArray>' % re.escape(name), text, re.S)
+        return hit.group(1).split() if hit else None
+
+    xyz, ijk, conn = array("Coordinates"), array("ijk"), array("connectivity")
+    if not (xyz and ijk and conn):
+        return None
+    xyz = [float(v) for v in xyz]
+    a = "ijk".index(axis)
+    cells = [c for c in range(len(ijk) // 3) if int(float(ijk[3 * c + a])) == start - 1]
+    if not cells:
+        return None
+    pts = [int(conn[8 * c + k]) for c in cells for k in range(8)]
+    lo = (min(xyz[0::3]), min(xyz[1::3]), -max(xyz[2::3]))
+    p3 = [(xyz[3 * p] - lo[0], xyz[3 * p + 1] - lo[1], (-xyz[3 * p + 2] - lo[2]) * zscale) for p in pts]
+    centre = [sum(q[d] for q in p3) / len(p3) for d in range(3)]
+    span = max(max(q[d] for q in p3) - min(q[d] for q in p3) for d in range(3))
+    if axis == "k":
+        return centre, 1.8 * span, CAMERAS["top"]
+    mx, my = centre[0], centre[1]
+    sxx = sum((q[0] - mx) ** 2 for q in p3)
+    syy = sum((q[1] - my) ** 2 for q in p3)
+    sxy = sum((q[0] - mx) * (q[1] - my) for q in p3)
+    theta = 0.5 * math.atan2(2 * sxy, sxx - syy)
+    fx, fy = -math.sin(theta), math.cos(theta)
+    if fy < 0:
+        fx, fy = -fx, -fy
+    return centre, 1.8 * span, (fx, fy, -0.12)
+
+
 def camera_direction(camera) -> tuple[float, float, float]:
     """A name from CAMERAS, a direction tuple, or 'x,y,z' (east, north, up)."""
     if isinstance(camera, (tuple, list)):

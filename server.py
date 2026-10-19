@@ -799,14 +799,14 @@ def ri_slice(slice_spec: str, view_id: int = -1, face_camera: bool = True) -> st
     shows nothing, so the project is saved to a temporary file, the filter written into the view
     there, and the project reopened; every view keeps its result and time step. Afterwards the
     project lives in that temporary file; save it elsewhere from the GUI to keep it.
-    face_camera turns the camera square to the slice, from the grid's own orientation.
+    face_camera turns the camera square to the slice, from the grid's own orientation; for a
+    geomechanical (VTK) case the slice is read from its first .vtu.
     """
     view = _view(view_id)
-    if _is_geomech(view):
-        raise ValueError("ri_slice works on grid cases; use ri_render with slice_spec for geomechanical cases")
+    geomech = _is_geomech(view)
     axis, start, count = _render.parse_slice(slice_spec)
     case = view.case()
-    ni, nj, nk = _render.grid_dimensions(case, False)
+    ni, nj, nk = _render.grid_dimensions(case, geomech)
     rng = {"i": (1, ni), "j": (1, nj), "k": (1, nk)}
     rng[axis] = (start, count)
     distance = -view.camera_matrix[11]
@@ -831,7 +831,8 @@ def ri_slice(slice_spec: str, view_id: int = -1, face_camera: bool = True) -> st
     text = text[:a] + "<CellFilters>" + _slice_filter_xml(f"slice {slice_spec}", rng) + "</CellFilters>" + text[b:]
     if face_camera:
         # Without a stored camera ResInsight frames the model on opening the view.
-        v0 = max(text.rfind("<EclipseView>", 0, a), text.rfind("<EclipseView ", 0, a))
+        v0 = max(text.rfind("<EclipseView>", 0, a), text.rfind("<EclipseView ", 0, a),
+                 text.rfind("<GeoMechView>", 0, a), text.rfind("<GeoMechView ", 0, a))
         head = re.sub(r"<CameraPosition>[^<]*</CameraPosition>|<CameraPointOfInterest>[^<]*</CameraPointOfInterest>",
                       "", text[v0:a])
         text = text[:v0] + head + text[a:]
@@ -840,12 +841,18 @@ def ri_slice(slice_spec: str, view_id: int = -1, face_camera: bool = True) -> st
     _S["cellinfo"].clear()
     if face_camera:
         target = _view(view.id)
-        frame = _render.slice_frame(case, axis, start, target.grid_z_scale)
+        frame = None if geomech else _render.slice_frame(case, axis, start, target.grid_z_scale)
         if frame:
             target.camera_matrix = _render.look_at_point(
                 _render.slice_direction(case, axis, start), frame[0], frame[1])
             target.camera_point_of_interest = frame[0]
-            target.update()
+        elif geomech:
+            # No cell centres over gRPC for geomechanical cases: read the slice from the VTK.
+            vf = _render.vtk_slice_frame(case.file_path, axis, start, target.grid_z_scale)
+            if vf:
+                target.camera_matrix = _render.look_at_point(vf[2], vf[0], vf[1])
+                target.camera_point_of_interest = vf[0]
+        target.update()
     out = _view_state(_view(view.id))
     out["project_file"] = str(rsp)
     return _dumps(out)

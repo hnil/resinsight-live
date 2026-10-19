@@ -24,7 +24,7 @@ New users: start with [GETTING_STARTED.md](GETTING_STARTED.md).
 
 `ri_slice(slice_spec="j=44", view_id=0)` shows only that slice in the user's view, and turns the
 camera square onto it from the grid's own orientation (corner-point grids are seldom aligned with
-north). A range filter made over gRPC is not tied to its case and shows nothing, so `ri_slice`
+north); it works on geomechanical (VTK) views too. A range filter made over gRPC is not tied to its case and shows nothing, so `ri_slice`
 saves the project to a temporary file, writes the filter there and reopens it. Every view keeps
 its result and time step; the project then lives in the temporary file, so save it elsewhere from
 the GUI to keep it. `ri_camera("top")` or `ri_camera("0.76,0.65,-0.2")` (east, north, up) points a
