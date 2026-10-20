@@ -943,25 +943,44 @@ def _display_origin(view):
 
 @mcp.tool()
 @_guard
-def ri_cell_filter(i: str = "", j: str = "", k: str = "", view_id: int = -1) -> str:
+def ri_cell_filter(i: str = "", j: str = "", k: str = "", grid_index: int = 0, append: bool = False,
+                   propagate: bool = True, view_id: int = -1) -> str:
     """Show only an IJK box of a grid view: each range 'a:b' or 'a' (1-based), empty = all.
 
-    Replaces the view's range filters, which propagate into LGRs inside the box. Goes through a
-    temporary project file like ri_slice; the camera is kept (use ri_look_at to frame).
+    grid_index 0 is the main grid, 1.. an LGR (indices local to it; ri_overview lists grids), so a
+    single refined row through a well can be shown. propagate lets a main-grid box include the LGR
+    cells inside it. append adds the box to the view's filters (shown cells = union) instead of
+    replacing them. Goes through a temporary project file like ri_slice; the camera is kept.
     """
     view = _view(view_id)
     if _is_geomech(view):
         raise ValueError("geomechanical (VTK) views have no IJK; use ri_intersection")
-    ni, nj, nk = _render.grid_dimensions(view.case(), False)
-    rng = {"i": _parse_range(i, ni), "j": _parse_range(j, nj), "k": _parse_range(k, nk)}
-    label = f"box i={i or 'all'} j={j or 'all'} k={k or 'all'}"
+    grids = view.case().grids()
+    if not 0 <= grid_index < len(grids):
+        raise ValueError(f"grid_index {grid_index} not in 0..{len(grids) - 1}")
+    d = grids[grid_index].dimensions()
+    rng = {"i": _parse_range(i, d.i), "j": _parse_range(j, d.j), "k": _parse_range(k, d.k)}
+    label = f"grid{grid_index} i={i or 'all'} j={j or 'all'} k={k or 'all'}"
+    xml = (
+        f"<CellRangeFilter><Name>{label}</Name><IsChecked>True</IsChecked><FilterType>INCLUDE</FilterType>"
+        f"<GridIndex>{grid_index}</GridIndex><PropagateToSubGrids>{'True' if propagate else 'False'}</PropagateToSubGrids>"
+        + "".join(f"<StartIndex{a.upper()}>{rng[a][0]}</StartIndex{a.upper()}><CellCount{a.upper()}>{rng[a][1]}</CellCount{a.upper()}>"
+                  for a in "ijk")
+        + "</CellRangeFilter>"
+    )
 
     def edit(block):
         a = block.find("<CellFilters>")
-        b = block.find("</CellFilters>", a) + len("</CellFilters>")
         if a < 0:
             raise RuntimeError("the view has no cell filter collection")
-        return block[:a] + "<CellFilters>" + _slice_filter_xml(label, rng) + "</CellFilters>" + block[b:]
+        b = block.find("</CellFilters>", a)
+        if append:
+            # drop the exclude-all filter ri_intersection(hide_cells) may have left
+            body = re.sub(r"<CellRangeFilter><Name>hide cells</Name>.*?</CellRangeFilter>", "",
+                          block[a + len("<CellFilters>"):b], flags=re.S)
+            block = block[:a] + "<CellFilters>" + body + xml + block[b:]
+            return re.sub(r"<CombineFilterMode>[^<]*</CombineFilterMode>", "<CombineFilterMode>OR</CombineFilterMode>", block, count=1)
+        return block[:a] + "<CellFilters>" + xml + block[b:]
 
     rsp = _rewrite_view(view, edit)
     out = _view_state(_view(view.id))
@@ -995,7 +1014,12 @@ def _well_track_xy(case, well: str) -> List[List[float]]:
     sim = [w for w in case.simulation_wells() if w.name == well]
     if not sim:
         raise ValueError(f"no simulation well {well} in case {case.id}")
-    cells = sim[0].cells(0) or []
+    # a well can be shut at the first steps: take the first step where it has connections
+    cells = []
+    for ts in range(len(_time_step_labels(case))):
+        cells = sim[0].cells(ts) or []
+        if len(cells) >= 2:
+            break
     centres = {}
     for c, info in zip(case.active_cell_centers(), case.cell_info_for_active_cells()):
         centres[(info.grid_index, info.local_ijk.i, info.local_ijk.j, info.local_ijk.k)] = (c.x, c.y, c.z)
