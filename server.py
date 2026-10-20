@@ -12,6 +12,7 @@ import contextlib
 import glob
 import functools
 import json
+import math
 import os
 import re
 import statistics
@@ -868,6 +869,228 @@ def ri_camera(direction: str, view_id: int = -1) -> str:
         _render.camera_direction(direction), view.camera_point_of_interest, -view.camera_matrix[11])
     view.update()
     return _dumps(_view_state(_view(view.id)))
+
+
+_VIEW_TAGS = ("ReservoirView", "EclipseView", "GeoMechView")
+
+
+def _rewrite_view(view, edit, drop_camera: bool = False) -> Path:
+    """Save the project, apply edit(view_xml) -> view_xml to this view only, and reopen it.
+
+    gRPC cannot create filters or intersections that are tied to their case, so these go
+    through the project file, as ri_slice does. Returns the temporary project path.
+    """
+    marker = f"__ri_view_{os.getpid()}_{int(time.time() * 1000)}__"
+    coll = view.descendants(rips.generated.generated_classes.CellFilterCollection)[0]
+    tag = coll.add_new_object(rips.generated.generated_classes.CellRangeFilter)
+    tag.name = marker
+    tag.is_checked = False
+    tag.update()
+
+    proj = _project()
+    rsp = Path(tempfile.mkdtemp(prefix="ri_view_")) / "view.rsp"
+    proj.save(str(rsp))
+    text = rsp.read_text()
+    m = text.find(f"<Name>{marker}</Name>")
+    if m < 0:
+        raise RuntimeError("could not find the view in the saved project")
+    starts = [(text.rfind(f"<{t}>", 0, m), t) for t in _VIEW_TAGS] + [(text.rfind(f"<{t} ", 0, m), t) for t in _VIEW_TAGS]
+    a, name = max(starts)
+    b = text.find(f"</{name}>", m) + len(f"</{name}>")
+    if a < 0 or b < len(f"</{name}>"):
+        raise RuntimeError("could not delimit the view in the saved project")
+    block = text[a:b]
+    f0 = block.rfind("<CellRangeFilter>", 0, block.find(f"<Name>{marker}</Name>"))
+    f1 = block.find("</CellRangeFilter>", f0) + len("</CellRangeFilter>")
+    block = block[:f0] + block[f1:]
+    block = edit(block)
+    if drop_camera:
+        block = re.sub(r"<CameraPosition>[^<]*</CameraPosition>|<CameraPointOfInterest>[^<]*</CameraPointOfInterest>",
+                       "", block)
+    rsp.write_text(text[:a] + block + text[b:])
+    proj.open(str(rsp))
+    _S["cellinfo"].clear()
+    return rsp
+
+
+def _parse_range(spec: str, n: int) -> tuple:
+    """'a:b' or 'a' (1-based, inclusive) or '' for all -> (start, count)."""
+    if not spec:
+        return (1, n)
+    lo, _, hi = str(spec).partition(":")
+    lo, hi = int(lo), int(hi or lo)
+    if not 1 <= lo <= hi <= n:
+        raise ValueError(f"range '{spec}' is outside 1..{n}")
+    return (lo, hi - lo + 1)
+
+
+def _display_origin(view):
+    """World point (x, y, z up) that ResInsight puts at the display origin of this view."""
+    case = view.case()
+    if _is_geomech(view):
+        # geomechanical cases: the low corner of the model box, read from the first .vtu
+        root = Path(case.file_path)
+        first = re.search(r'file="([^"]+)"', root.read_text()).group(1)
+        text = (root.parent / first).read_text()
+        hit = re.search(r'Name="Coordinates"[^>]*>(.*?)</DataArray>', text, re.S)
+        if not hit:
+            raise ValueError("the geomechanical .vtu has no ASCII Coordinates array")
+        xyz = [float(v) for v in hit.group(1).split()]
+        return (min(xyz[0::3]), min(xyz[1::3]), min(-z for z in xyz[2::3]))
+    allc = [(c.x, c.y, -c.z) for c in case.grids()[0].cell_centers() if math.isfinite(c.x) and (c.x or c.y)]
+    return tuple((min(p[d] for p in allc) + max(p[d] for p in allc)) / 2 for d in range(3))
+
+
+@mcp.tool()
+@_guard
+def ri_cell_filter(i: str = "", j: str = "", k: str = "", view_id: int = -1) -> str:
+    """Show only an IJK box of a grid view: each range 'a:b' or 'a' (1-based), empty = all.
+
+    Replaces the view's range filters, which propagate into LGRs inside the box. Goes through a
+    temporary project file like ri_slice; the camera is kept (use ri_look_at to frame).
+    """
+    view = _view(view_id)
+    if _is_geomech(view):
+        raise ValueError("geomechanical (VTK) views have no IJK; use ri_intersection")
+    ni, nj, nk = _render.grid_dimensions(view.case(), False)
+    rng = {"i": _parse_range(i, ni), "j": _parse_range(j, nj), "k": _parse_range(k, nk)}
+    label = f"box i={i or 'all'} j={j or 'all'} k={k or 'all'}"
+
+    def edit(block):
+        a = block.find("<CellFilters>")
+        b = block.find("</CellFilters>", a) + len("</CellFilters>")
+        if a < 0:
+            raise RuntimeError("the view has no cell filter collection")
+        return block[:a] + "<CellFilters>" + _slice_filter_xml(label, rng) + "</CellFilters>" + block[b:]
+
+    rsp = _rewrite_view(view, edit)
+    out = _view_state(_view(view.id))
+    out["project_file"] = str(rsp)
+    return _dumps(out)
+
+
+@mcp.tool()
+@_guard
+def ri_look_at(x: float, y: float, depth: float, direction: str = "front", distance: float = 0.0,
+               view_id: int = -1) -> str:
+    """Aim a view's camera at a world point: x, y (model coordinates) and depth (positive down).
+
+    direction as in ri_camera (top, front, side, oblique or 'x,y,z'); distance in display units
+    (metres, vertical stretched by the z scale), 0 keeps the current one. Works the same for grid
+    and geomechanical views, so two views can be framed identically for side-by-side pictures.
+    """
+    view = _view(view_id)
+    o = _display_origin(view)
+    zs = view.grid_z_scale or 1.0
+    poi = [x - o[0], y - o[1], (-depth - o[2]) * zs]
+    dist = distance if distance > 0 else -view.camera_matrix[11]
+    view.camera_matrix = _render.look_at_point(_render.camera_direction(direction), poi, dist)
+    view.camera_point_of_interest = poi
+    view.update()
+    return _dumps(_view_state(_view(view.id)))
+
+
+def _well_track_xy(case, well: str) -> List[List[float]]:
+    """Plan polyline of a simulation well: its connected cells' centres, in connection order."""
+    sim = [w for w in case.simulation_wells() if w.name == well]
+    if not sim:
+        raise ValueError(f"no simulation well {well} in case {case.id}")
+    cells = sim[0].cells(0) or []
+    centres = {}
+    for c, info in zip(case.active_cell_centers(), case.cell_info_for_active_cells()):
+        centres[(info.grid_index, info.local_ijk.i, info.local_ijk.j, info.local_ijk.k)] = (c.x, c.y, c.z)
+    pts = []
+    for cell in cells:
+        p = centres.get((cell.grid_index, cell.ijk.i, cell.ijk.j, cell.ijk.k))
+        if p and (not pts or abs(p[0] - pts[-1][0]) + abs(p[1] - pts[-1][1]) > 1e-6):
+            pts.append([p[0], p[1], p[2]])
+    if len(pts) < 2:
+        raise ValueError(f"well {well} has fewer than two distinct connected cells at time step 0")
+    return pts
+
+
+@mcp.tool()
+@_guard
+def ri_intersection(points: Optional[List[List[float]]] = None, well: str = "", case_id: int = -1,
+                    extent: float = 200.0, hide_cells: bool = False, name: str = "",
+                    view_id: int = -1) -> str:
+    """Add a vertical intersection along a plan polyline to a view (grid or geomechanical).
+
+    points: [[x, y], ...] in model coordinates; or well: a simulation well of case_id (default the
+    view's case, which must be a grid case) whose connected cells give the track. extent prolongs
+    both ends. hide_cells hides the 3D cells so only the section shows, and the section is never
+    clipped by the cell filters. The same points can be given to several views for side-by-side.
+    """
+    view = _view(view_id)
+    if not points:
+        if not well:
+            raise ValueError("give points or well")
+        points = _well_track_xy(_case(case_id) if case_id >= 0 else view.case(), well)
+    pts = " ".join(f"{p[0]:.3f} {p[1]:.3f} {-(p[2] if len(p) > 2 else 0.0):.3f}" for p in points)
+    label = name or (f"along {well}" if well else "polyline")
+    xml = (
+        "<CurveIntersection><Active>True</Active><UserDescription>" + label + "</UserDescription>"
+        "<Type>CS_POLYLINE</Type><Direction>CS_VERTICAL</Direction>"
+        f"<Points>{pts}</Points><ExtentLength>{extent}</ExtentLength></CurveIntersection>"
+    )
+
+    def edit(block):
+        if "<CrossSections/>" in block:
+            block = block.replace("<CrossSections/>", "<CrossSections>" + xml + "</CrossSections>", 1)
+        else:
+            a = block.find("<IntersectionCollection>")
+            c = block.find("<CrossSections>", a)
+            if a < 0 or c < 0:
+                raise RuntimeError("the view has no intersection collection")
+            block = block[:c + len("<CrossSections>")] + xml + block[c + len("<CrossSections>"):]
+        if hide_cells:
+            block = block.replace("<ApplyCellFilters>True </ApplyCellFilters>", "<ApplyCellFilters>False</ApplyCellFilters>")
+            a = block.find("<CellFilters>")
+            b = block.find("</CellFilters>", a) + len("</CellFilters>")
+            # an exclude-all filter hides the 3D cells without touching the section
+            none = ("<CellRangeFilter><Name>hide cells</Name><IsChecked>True</IsChecked><FilterType>EXCLUDE</FilterType>"
+                    "<GridIndex>0</GridIndex><StartIndexI>1</StartIndexI><CellCountI>100000</CellCountI>"
+                    "<StartIndexJ>1</StartIndexJ><CellCountJ>100000</CellCountJ>"
+                    "<StartIndexK>1</StartIndexK><CellCountK>100000</CellCountK></CellRangeFilter>")
+            if a >= 0:
+                block = block[:a] + "<CellFilters>" + none + "</CellFilters>" + block[b:]
+        return block
+
+    rsp = _rewrite_view(view, edit)
+    out = _view_state(_view(view.id))
+    out["intersection"] = {"name": label, "points": points}
+    out["project_file"] = str(rsp)
+    return _dumps(out)
+
+
+@mcp.tool()
+@_guard
+def ri_well_display(well: str = "", pipe_radius: float = 0.0, show_cells: Optional[bool] = None,
+                    show_label: Optional[bool] = None, view_id: int = -1) -> str:
+    """Simulation-well display of a grid view: pipe_radius (scale, e.g. 0.05 thin, 1 thick; 0 keeps),
+    show_cells (draw the connected cells semi-transparently), show_label. well empty = all wells."""
+    view = _view(view_id)
+
+    def edit(block):
+        if pipe_radius > 0:
+            block = re.sub(r"<WellPipeRadiusScale>[^<]*</WellPipeRadiusScale>",
+                           f"<WellPipeRadiusScale>{pipe_radius}</WellPipeRadiusScale>", block, count=1)
+
+        def per_well(m):
+            w = m.group(0)
+            if well and f"<Name>{well}</Name>" not in w:
+                return w
+            for field, val in (("ShowWellCells", show_cells), ("ShowWellLabel", show_label)):
+                if val is not None:
+                    w = re.sub(rf"<{field}>[^<]*</{field}>", f"<{field}>{'True' if val else 'False'}</{field}>", w)
+            return w
+
+        return re.sub(r"<Well>.*?</Well>", per_well, block, flags=re.S)
+
+    rsp = _rewrite_view(view, edit)
+    out = _view_state(_view(view.id))
+    out["project_file"] = str(rsp)
+    return _dumps(out)
 
 
 def _summary_case(summary_case_id: int = -1):

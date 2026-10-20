@@ -12,8 +12,8 @@ reservoir simulation runs without touching the GUI.
   `ri_property_stats`, `ri_cell_values`, `ri_time_steps`, `ri_wells`, `ri_summary_cases`,
   `ri_summary_values`.
 - **Drive the view.** `ri_open`, `ri_create_view`, `ri_set_time_step`, `ri_set_cell_result`,
-  `ri_slice`, `ri_camera`, `ri_summary_plot`, and `ri_execute_command` for anything else in
-  ResInsight's command API.
+  `ri_slice`, `ri_cell_filter`, `ri_intersection`, `ri_well_display`, `ri_camera`, `ri_look_at`,
+  `ri_summary_plot`, and `ri_execute_command` for anything else in ResInsight's command API.
 - **Render pictures of a run.** `ri_render` starts a private ResInsight, writes PNGs (properties
   at chosen steps, IJK slices, camera presets, summary plots), closes it and returns the images
   inline. The same renderer is a command-line tool, `render.py`.
@@ -29,6 +29,15 @@ saves the project to a temporary file, writes the filter there and reopens it. E
 its result and time step; the project then lives in the temporary file, so save it elsewhere from
 the GUI to keep it. `ri_camera("top")` or `ri_camera("0.76,0.65,-0.2")` (east, north, up) points a
 view without slicing. `ri_open` also takes a `.GRDECL` grid with its properties.
+
+`ri_cell_filter(i="19:32", j="9:17", k="27")` shows an IJK box (LGRs inside it included).
+`ri_intersection(well="W01")` or `ri_intersection(points=[[x, y], ...])` adds a vertical section
+along a well track or plan polyline, to grid and geomechanical views alike; `hide_cells=True`
+leaves only the section. `ri_look_at(x, y, depth, direction, distance)` aims a view at a model
+point, accounting for each view's own display offset, so a grid view and a geomechanical view of
+the same run can be framed identically side by side. `ri_well_display` sets the pipe radius and
+shows a well's connected cells. Geomechanical sections are drawn only through hexahedral cells:
+polyhedral cells (fault or LGR face splits) are left out.
 
 The plugin also ships the `resinsight-pictures` skill, which tells Claude how to choose slices,
 steps and cameras, and to read the images before describing them.
