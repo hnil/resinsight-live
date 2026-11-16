@@ -108,7 +108,66 @@ def _case_with_selection(case_id: int = -1):
                     return c
             except Exception:
                 continue
-    return _case(case_id)
+    case = _case(case_id)
+    if _is_geomech(case):
+        raise ValueError(
+            "ResInsight's API reports picks only in grid views. For a geomechanical "
+            "view, read the element or ijk from the Result Info panel and call ri_geomech_element."
+        )
+    return case
+
+
+def _pvd_files(pvd: Path) -> List[Path]:
+    """The .vtu of each step of a .pvd, in file order (ResInsight's step order)."""
+    return [pvd.parent / f for f in re.findall(r'file="([^"]+)"', pvd.read_text())]
+
+
+def _vtu_cell(vtu: Path, element: int = -1, ijk: Optional[List[int]] = None) -> Dict[str, Any]:
+    """Cell data and corner points of one cell of an ASCII .vtu, by index or 0-based ijk."""
+    text = vtu.read_text()
+    arrays: Dict[str, Any] = {}
+    for section in ("CellData", "Points", "Cells"):
+        body = re.search(r"<%s[^>]*>(.*?)</%s>" % (section, section), text, re.S)
+        if not body:
+            continue
+        for head, data in re.findall(r"<DataArray([^>]*)>(.*?)</DataArray>", body.group(1), re.S):
+            if 'format="ascii"' not in head:
+                raise ValueError(f"{vtu.name}: only ASCII .vtu can be read")
+            name = re.search(r'Name="([^"]+)"', head).group(1)
+            ncomp = int((re.search(r'NumberOfComponents="(\d+)"', head) or [0, 1])[1])
+            arrays[name] = (section, ncomp, data.split())
+    ncell = len(arrays["offsets"][2])
+    if ijk is not None:
+        if "ijk" not in arrays:
+            raise ValueError(f"{vtu.name} has no 'ijk' cell array; give the element index")
+        flat = arrays["ijk"][2]
+        want = [float(v) for v in ijk]
+        element = next((c for c in range(ncell) if [float(x) for x in flat[3 * c : 3 * c + 3]] == want), -1)
+        if element < 0:
+            raise ValueError(f"no cell with 0-based ijk {ijk} in {vtu.name}")
+    if not 0 <= element < ncell:
+        raise ValueError(f"element {element} out of range 0..{ncell - 1}")
+
+    def num(s):
+        v = float(s)
+        return int(v) if v.is_integer() and abs(v) < 2**53 else v
+
+    offsets, conn = arrays["offsets"][2], arrays["connectivity"][2]
+    lo = int(offsets[element - 1]) if element else 0
+    nodes = [int(n) for n in conn[lo : int(offsets[element])]]
+    xyz = arrays["Coordinates"][2]
+    cell = {
+        name: (lambda vals: vals[0] if n == 1 else vals)([num(v) for v in data[n * element : n * element + n]])
+        for name, (sec, n, data) in arrays.items()
+        if sec == "CellData"
+    }
+    return {
+        "element": element,
+        "cell_count": ncell,
+        "nodes": nodes,
+        "corners": [[float(xyz[3 * p + d]) for d in range(3)] for p in nodes],
+        "cell_data": cell,
+    }
 
 
 def _view(view_id: int = -1):
@@ -523,6 +582,43 @@ def ri_selected_cells(case_id: int = -1, with_values: bool = True) -> str:
                 out["result"] = {"type": rtype, "variable": rvar, "time_step": step}
                 for cell, val in zip(out["cells"], vals):
                     cell["value"] = val
+    return _dumps(out)
+
+
+@mcp.tool()
+@_guard
+def ri_geomech_element(
+    element: int = -1,
+    i: int = 0,
+    j: int = 0,
+    k: int = 0,
+    case_id: int = -1,
+    time_step: int = -1,
+) -> str:
+    """One element of a geomechanical (VTK) case: its cell data, ijk and corner points, read from the .vtu.
+
+    ResInsight's API cannot report picks in geomechanical views, so give the element index or the
+    1-based i, j, k shown in the Result Info panel after picking. time_step -1 = the step shown in
+    the case's view. Corners are as stored in the file (x, y, z = depth, positive down).
+    """
+    case = _case(case_id) if case_id >= 0 else next((c for c in _all_cases(_project()) if _is_geomech(c)), None)
+    if case is None or not _is_geomech(case):
+        raise ValueError("no geomechanical case; give case_id of a .pvd case")
+    pvd = Path(case.file_path)
+    _check_path(str(pvd), "case file")
+    files = _pvd_files(pvd)
+    if time_step < 0:
+        view = next((v for v in _project().views() if _is_geomech(v) and v.case().id == case.id), None)
+        time_step = getattr(view, "current_time_step", 0) if view else 0
+    if not 0 <= time_step < len(files):
+        raise ValueError(f"time_step {time_step} out of range 0..{len(files) - 1}")
+    ijk = [i - 1, j - 1, k - 1] if (i and j and k) else None
+    if ijk is None and element < 0:
+        raise ValueError("give element, or all of i, j, k (1-based)")
+    out = _vtu_cell(files[time_step], element, ijk)
+    if isinstance(out["cell_data"].get("ijk"), list):
+        out["ijk_1based"] = [v + 1 for v in out["cell_data"]["ijk"]]
+    out.update(case=case.name, case_id=case.id, time_step=time_step, file=files[time_step].name)
     return _dumps(out)
 
 

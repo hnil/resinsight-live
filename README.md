@@ -6,7 +6,9 @@ reservoir simulation runs without touching the GUI.
 
 - **Follow the user's session.** `ri_watch` reports what changed in the GUI since the last call
   (time step, cell result, camera, picked cells, cases or views opened). `ri_selected_cells` and
-  `ri_picked_cell_report` read the cells the user clicked. `ri_snapshot` returns an image of a
+  `ri_picked_cell_report` read the cells the user clicked in grid views; ResInsight's API has no
+  picks in geomechanical views, so `ri_geomech_element` takes the element Id or ijk shown in Result
+  Info and reads that cell's data and corners from the .vtu. `ri_snapshot` returns an image of a
   3D view.
 - **Query the model.** `ri_status`, `ri_overview`, `ri_view`, `ri_properties`,
   `ri_property_stats`, `ri_cell_values`, `ri_time_steps`, `ri_wells`, `ri_summary_cases`,
