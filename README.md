@@ -15,7 +15,7 @@ reservoir simulation runs without touching the GUI.
   `ri_summary_values`.
 - **Drive the view.** `ri_open`, `ri_create_view`, `ri_set_time_step`, `ri_set_cell_result`,
   `ri_slice`, `ri_cell_filter`, `ri_intersection`, `ri_well_display`, `ri_camera`, `ri_look_at`,
-  `ri_summary_plot`, and `ri_execute_command` for anything else in ResInsight's command API.
+  `ri_surfaces`, `ri_remove`, `ri_summary_plot`, and `ri_execute_command` for anything else in ResInsight's command API.
 - **Render pictures of a run.** `ri_render` starts a private ResInsight, writes PNGs (properties
   at chosen steps, IJK slices, camera presets, summary plots), closes it and returns the images
   inline. The same renderer is a command-line tool, `render.py`.
@@ -30,7 +30,8 @@ north); it works on geomechanical (VTK) views too. A range filter made over gRPC
 saves the project to a temporary file, writes the filter there and reopens it. Every view keeps
 its result and time step; the project then lives in the temporary file, so save it elsewhere from
 the GUI to keep it. `ri_camera("top")` or `ri_camera("0.76,0.65,-0.2")` (east, north, up) points a
-view without slicing. `ri_open` also takes a `.GRDECL` grid with its properties.
+view without slicing; the direction is the line of sight (eye towards model), not the eye's
+offset. `ri_open` also takes a `.GRDECL` grid with its properties.
 
 `ri_cell_filter(i="19:32", j="9:17", k="27")` shows an IJK box (LGRs inside it included).
 `ri_intersection(well="W01")` or `ri_intersection(points=[[x, y], ...])` adds a vertical section
@@ -40,6 +41,17 @@ point, accounting for each view's own display offset, so a grid view and a geome
 the same run can be framed identically side by side. `ri_well_display` sets the pipe radius and
 shows a well's connected cells. Geomechanical sections are drawn only through hexahedral cells:
 polyhedral cells (fault or LGR face splits) are left out.
+
+### Surfaces and removing things
+
+Fracture surfaces (`<CASE>*.pvd` beside a grid) come in with the case. A new view from `ri_open`
+or `ri_create_view` shows only its own case's surfaces; `ri_surfaces(view_id, only="perf_14")`,
+`show=`, `hide=` or `own_case=True` change that per view (hidden surfaces draw no legend), and with
+no argument it lists them. `ri_remove(case_ids=[3], surfaces="Reveal_outline")` takes cases and
+surfaces out of the project without closing it (case removal needs a ResInsight with
+`Case.close()`, 2026-11-20 or later). `closeProject` stays refused on an instance the plugin did
+not start. A `.pvd` surface follows the view by date: each step shows the last surface entry at or
+before it (ResInsight 2026-11-20 or later; older builds count entries).
 
 The plugin also ships the `resinsight-pictures` skill, which tells Claude how to choose slices,
 steps and cameras, and to read the images before describing them.
