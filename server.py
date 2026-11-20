@@ -1002,7 +1002,12 @@ def ri_slice(slice_spec: str, view_id: int = -1, face_camera: bool = True) -> st
 @_guard
 def ri_camera(direction: str, view_id: int = -1) -> str:
     """Point a live 3D view along a direction: top, front (looking north), side (looking east),
-    oblique, or 'x,y,z' with x east, y north, z up. The distance to the model is kept."""
+    oblique, or 'x,y,z' with x east, y north, z up.
+
+    direction is the line of sight, from the eye towards the model (the eye sits at the point of
+    interest minus distance * direction): 'top' is 0,0,-1. To look square onto a vertical plane
+    with strike s (degrees from north), use its normal, cos(s),-sin(s),0 or its negative.
+    The distance to the model is kept."""
     view = _view(view_id)
     view.camera_matrix = _render.look_at_point(
         _render.camera_direction(direction), view.camera_point_of_interest, -view.camera_matrix[11])
@@ -1133,7 +1138,8 @@ def ri_look_at(x: float, y: float, depth: float, direction: str = "front", dista
                view_id: int = -1) -> str:
     """Aim a view's camera at a world point: x, y (model coordinates) and depth (positive down).
 
-    direction as in ri_camera (top, front, side, oblique or 'x,y,z'); distance in display units
+    direction as in ri_camera (top, front, side, oblique or 'x,y,z'): the line of sight from the
+    eye towards the point, not the eye's offset from it; distance in display units
     (metres, vertical stretched by the z scale), 0 keeps the current one. Works the same for grid
     and geomechanical views, so two views can be framed identically for side-by-side pictures.
     """
