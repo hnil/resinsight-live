@@ -840,12 +840,51 @@ def _run_info(path: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _companion_pvds(grid: str) -> List[Path]:
+    """<BASE>*.pvd beside a grid file (fracture surfaces), as the GUI's case import finds them:
+    not <BASE>.pvd itself (the geomechanical case) nor files of another case <BASE>X."""
+    g = Path(grid)
+    base = g.stem
+    others = {f.stem for f in g.parent.iterdir()
+              if f.suffix.upper() in (".DATA", ".EGRID", ".SMSPEC", ".UNSMRY", ".UNRST")
+              and f.stem.lower().startswith(base.lower()) and f.stem.lower() != base.lower()}
+    return sorted(f for f in g.parent.glob(base + "*.pvd")
+                  if f.stem.lower() != base.lower()
+                  and not any(f.name.lower().startswith(o.lower()) for o in others))
+
+
+def _import_companion_pvds(proj, grid: str) -> List[str]:
+    """Named <run dir>/<file>: runs write identically named fracture files, and ResInsight
+    shows no file path. A surface of that name already loaded is not imported again."""
+    folder = proj.surface_folder()
+    policy = getattr(rips.generated.generated_classes, "NameConflictPolicy", None)
+    have = {getattr(s, "surface_user_description", "") for s in folder.surfaces_field()}
+    done = []
+    for f in _companion_pvds(grid):
+        name = f"{f.parent.name}/{f.name}"
+        if name in have:
+            done.append(f"{name}: already loaded")
+            continue
+        try:
+            if policy is not None:
+                s = folder.import_surface(str(f), on_name_conflict=policy.AUTO_RENAME)
+            else:
+                s = folder.import_surface(str(f))
+            if hasattr(s, "surface_user_description"):
+                s.surface_user_description = name
+                s.update()
+            done.append(name)
+        except Exception as e:  # a surface that fails must not fail the case
+            done.append(f"{f.name}: not imported ({e})")
+    return done
+
+
 @mcp.tool()
 @_guard
 def ri_open(path: str, create_view: bool = True) -> str:
     """Open a ResInsight project (.rsp), or load a case (.EGRID/.GRID, a run directory, a
     .GRDECL grid with its properties, or a geomechanical case: .pvd from OPM Flow's VTK output,
-    .odb, .inp)."""
+    .odb, .inp). A grid case also gets its <CASE>*.pvd fracture surfaces, as in the GUI."""
     _check_path(path, "ri_open")
     proj = _project()
     _S["cellinfo"].clear()
@@ -861,6 +900,10 @@ def ri_open(path: str, create_view: bool = True) -> str:
     out = {"loaded": path, "case_id": case.id, "name": case.name, "type": type(case).__name__}
     if run:
         out["run"] = run
+    if not _is_geomech(case):
+        surfaces = _import_companion_pvds(proj, path)
+        if surfaces:
+            out["surfaces"] = surfaces
     if create_view:
         # a geomechanical case opens with a view of its own
         views = case.descendants(rips.View) if _is_geomech(case) else []
