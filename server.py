@@ -1393,6 +1393,9 @@ def ri_execute_command(name: str = "", params: Optional[Dict[str, Any]] = None) 
     params = params or {}
     _check_command(name, params, fields[name].message_type)
     msg_cls = getattr(Commands_pb2, fields[name].message_type.name)
+    if name == "saveProject":
+        # a save that cannot open its file left older ResInsight builds with a broken path table
+        Path(params["filePath"]).expanduser().parent.mkdir(parents=True, exist_ok=True)
     reply = _project()._execute_command(**{name: msg_cls(**params)})
     if name == "setExportFolder":
         _S["export_folder_ok"] = True  # only reached when the folder passed _check_command
