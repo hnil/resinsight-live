@@ -27,6 +27,7 @@ from mcp.server.mcpserver import MCPServer, Image
 import rips
 import Commands_pb2
 
+import csv_summary as _csv_summary
 import render as _render
 
 mcp = MCPServer(
@@ -879,12 +880,40 @@ def _import_companion_pvds(proj, grid: str) -> List[str]:
     return done
 
 
+def _rename_summary_case(case, name: str) -> None:
+    case.name_setting = "CUSTOM_NAME"
+    case.short_name = name
+    case.update()
+
+
+def _open_summary(proj, path: str, name: str = "") -> str:
+    p = Path(path)
+    out: Dict[str, Any] = {"loaded": path}
+    if p.suffix.upper() == ".CSV":
+        cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "resinsight-live" / "csv-summary"
+        header = _csv_summary.write_summary(p, cache / p.parent.name)
+        out["converted_to"] = str(header)
+    else:
+        header = p.with_suffix(".SMSPEC")
+    case = proj.import_summary_case(str(header))
+    if case is None:
+        raise ValueError(f"ResInsight did not import {header} as a summary case")
+    if name:
+        _rename_summary_case(case, name)
+    out.update({"summary_case_id": case.id, "name": getattr(case, "short_name", ""),
+                "vector_count": len(list(case.available_addresses().values))})
+    return _dumps(out)
+
+
 @mcp.tool()
 @_guard
-def ri_open(path: str, create_view: bool = True, own_surfaces_only: bool = True) -> str:
+def ri_open(path: str, create_view: bool = True, own_surfaces_only: bool = True, name: str = "") -> str:
     """Open a ResInsight project (.rsp), or load a case (.EGRID/.GRID, a run directory, a
     .GRDECL grid with its properties, or a geomechanical case: .pvd from OPM Flow's VTK output,
     .odb, .inp). A grid case also gets its <CASE>*.pvd fracture surfaces, as in the GUI.
+    A .SMSPEC/.UNSMRY/.ESMRY loads that summary case alone. A .csv with a Date column and
+    columns like WBHP:F-1H[BARSA] (';' or ',' separated) is converted to a summary case.
+    name: display name of a summary case loaded this way.
 
     own_surfaces_only: the new view shows only the surfaces of this case (named <CASE>*), not
     every surface in the project; change it later with ri_surfaces."""
@@ -894,6 +923,8 @@ def ri_open(path: str, create_view: bool = True, own_surfaces_only: bool = True)
     if path.lower().endswith(".rsp"):
         proj.open(path)
         return ri_status()
+    if Path(path).suffix.upper() in (".SMSPEC", ".UNSMRY", ".ESMRY", ".CSV"):
+        return _open_summary(proj, path, name)
     run = _run_info(path)
     if Path(path).is_dir():
         path = str(_render.find_grid(path))
@@ -1453,23 +1484,73 @@ def ri_summary_values(address: str, summary_case_id: int = -1) -> str:
 
 @mcp.tool()
 @_guard
-def ri_summary_plot(address: str, summary_case_id: int = -1) -> str:
-    """Open a summary plot in ResInsight's plot window, e.g. address='WBHP:B-3H'.
+def ri_summary_plot(
+    address: str,
+    summary_case_id: int = -1,
+    summary_case_ids: Optional[List[int]] = None,
+    title: str = "",
+    labels: Optional[List[str]] = None,
+    per_vector: bool = False,
+) -> str:
+    """Open ONE summary plot in ResInsight's plot window with a curve per case and address.
 
-    The user sees the plot appear; the values are returned as well.
+    address: one vector or several, comma separated: 'WBHP:F-1H' or 'WBHP:F-1H,WWIRFRAC:F-1H'
+    (ResInsight puts different units on separate axes; wildcards like 'WBHP:*' work).
+    summary_case_ids: cases to overlay (ids from ri_summary_cases); default summary_case_id,
+    whose default is the first case. labels: display names for those cases, in the same order
+    (renames the cases in ResInsight; useful when runs share a case name). title: plot title;
+    default ResInsight's automatic one. per_vector: one plot per address, each with all cases;
+    then each run gets its own colour (in a single plot ResInsight colours by vector and marks
+    the case with a symbol). The plots appear in the plot window when it is open.
+    Returns per curve its range; the full values only when there is a single curve.
     """
-    c = _summary_case(summary_case_id)
+    addresses = [a.strip() for a in re.split(r"[,;]", address) if a.strip()]
+    if not addresses:
+        raise ValueError("address is empty")
+    ids = summary_case_ids or [summary_case_id]
+    cases = [_summary_case(i) for i in ids]
+    if labels:
+        if len(labels) != len(cases):
+            raise ValueError(f"{len(labels)} labels for {len(cases)} cases")
+        for c, label in zip(cases, labels):
+            _rename_summary_case(c, label)
     coll = _project().descendants(rips.SummaryPlotCollection)
     if not coll:
         raise RuntimeError("no SummaryPlotCollection in the project")
-    coll[0].new_summary_plot(summary_cases=[c], address=address)
-    return _dumps(
-        {
-            "plotted": address,
-            "summary_case": getattr(c, "short_name", ""),
-            "values": list(c.summary_vector_values(address).values),
-        }
-    )
+    groups = [[a] for a in addresses] if per_vector else [addresses]
+    available = {c.id: set(c.available_addresses().values) for c in cases}
+    plots = 0
+    for group in groups:
+        # ResInsight plots a case's first vector when no address matches it
+        use = [c for c in cases if any("*" in a or "?" in a or a in available[c.id] for a in group)]
+        if not use:
+            continue
+        plot = coll[0].new_summary_plot(summary_cases=use, address=";".join(group))
+        if title and plot is not None:
+            plot.is_using_auto_name = False
+            plot.plot_description = f"{title}: {group[0]}" if per_vector else title
+            plot.update()
+        plots += 1
+    curves, missing, v = [], [], []
+    for c in cases:
+        for a in addresses:
+            name = getattr(c, "short_name", "")
+            if "*" in a or "?" in a:
+                curves.append({"case": name, "address": a, "note": "wildcard: see the plot"})
+                continue
+            if a not in available[c.id]:
+                missing.append({"case": name, "summary_case_id": c.id, "address": a})
+                continue
+            v = list(c.summary_vector_values(a).values)
+            curves.append({"case": name, "summary_case_id": c.id, "address": a, "n": len(v),
+                           "first": v[0] if v else None, "last": v[-1] if v else None,
+                           "min": min(v) if v else None, "max": max(v) if v else None})
+    out: Dict[str, Any] = {"plots_created": plots, "curves": curves}
+    if missing:
+        out["not_in_case"] = missing
+    if len(curves) == 1 and "n" in curves[0]:
+        out["values"] = v
+    return _dumps(out)
 
 
 @mcp.tool()

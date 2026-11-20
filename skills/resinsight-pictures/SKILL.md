@@ -60,7 +60,9 @@ present it. Describe what a picture shows with the numbers from that box, not ju
 
 ## Limits
 
-- Summary plots show one case per image; for overlaying many runs use a dedicated plotting tool.
+- `ri_render` summary plots show one case per image. To overlay runs, use the live tools:
+  `ri_open` each `.SMSPEC` (or a `Date;WBHP:W[UNIT]` `.csv`) with `name=`, then
+  `ri_summary_plot(address, summary_case_ids=[...], per_vector=True)`.
 - 3D images come out at roughly 800×750 regardless of the requested size.
 - Slices are one IJK range per call.
 - Geomechanical cases cannot use `template`.

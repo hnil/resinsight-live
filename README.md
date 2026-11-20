@@ -53,6 +53,17 @@ surfaces out of the project without closing it (case removal needs a ResInsight 
 not start. A `.pvd` surface follows the view by date: each step shows the last surface entry at or
 before it (ResInsight 2026-11-20 or later; older builds count entries).
 
+### Comparing runs in a summary plot
+
+`ri_open` loads a summary file alone (`.SMSPEC`, `.UNSMRY`, `.ESMRY`), with `name=` as its
+display name. A `.csv` with a `Date` column and columns such as `WBHP:F-1H[BARSA]` is written as
+an SMSPEC/UNSMRY pair under `~/.cache/resinsight-live/csv-summary/` and loaded the same way.
+`ri_summary_plot("WBHP:F-1H,WWIRFRAC:F-1H", summary_case_ids=[1, 2, 3], labels=["A", "B", "C"])`
+draws every case and vector in one plot in the plot window (different units on separate axes);
+`per_vector=True` gives one plot per vector with a colour per run, which reads better. A case
+that lacks a vector is left out of that plot and listed under `not_in_case`. The plots appear
+only while ResInsight's plot window is open.
+
 The plugin also ships the `resinsight-pictures` skill, which tells Claude how to choose slices,
 steps and cameras, and to read the images before describing them.
 
