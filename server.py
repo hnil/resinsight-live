@@ -881,10 +881,13 @@ def _import_companion_pvds(proj, grid: str) -> List[str]:
 
 @mcp.tool()
 @_guard
-def ri_open(path: str, create_view: bool = True) -> str:
+def ri_open(path: str, create_view: bool = True, own_surfaces_only: bool = True) -> str:
     """Open a ResInsight project (.rsp), or load a case (.EGRID/.GRID, a run directory, a
     .GRDECL grid with its properties, or a geomechanical case: .pvd from OPM Flow's VTK output,
-    .odb, .inp). A grid case also gets its <CASE>*.pvd fracture surfaces, as in the GUI."""
+    .odb, .inp). A grid case also gets its <CASE>*.pvd fracture surfaces, as in the GUI.
+
+    own_surfaces_only: the new view shows only the surfaces of this case (named <CASE>*), not
+    every surface in the project; change it later with ri_surfaces."""
     _check_path(path, "ri_open")
     proj = _project()
     _S["cellinfo"].clear()
@@ -894,6 +897,7 @@ def ri_open(path: str, create_view: bool = True) -> str:
     run = _run_info(path)
     if Path(path).is_dir():
         path = str(_render.find_grid(path))
+    n_before = len(proj.surface_folder().surfaces_field())
     case = proj.load_case(path)
     if case is None:
         raise ValueError(f"ResInsight loaded {path}, but this rips cannot return the case (needs a 2026.9+ build)")
@@ -901,21 +905,33 @@ def ri_open(path: str, create_view: bool = True) -> str:
     if run:
         out["run"] = run
     if not _is_geomech(case):
-        surfaces = _import_companion_pvds(proj, path)
-        if surfaces:
-            out["surfaces"] = surfaces
+        # ResInsight's loadCase imports them itself since 2026-10; older builds do not
+        if len(proj.surface_folder().surfaces_field()) == n_before:
+            surfaces = _import_companion_pvds(proj, path)
+            if surfaces:
+                out["surfaces"] = surfaces
     if create_view:
         # a geomechanical case opens with a view of its own
         views = case.descendants(rips.View) if _is_geomech(case) else []
-        out["view_id"] = views[0].id if views else case.create_view().id
+        view = views[0] if views else case.create_view()
+        out["view_id"] = view.id
+        if own_surfaces_only and _surface_names():
+            out["surfaces_in_view"] = _set_view_surfaces(view, own_case=True)["surfaces"]
     return _dumps(out)
 
 
 @mcp.tool()
 @_guard
-def ri_create_view(case_id: int = -1) -> str:
-    """Create a new 3D view on a case (needed before ri_snapshot if no view is open)."""
-    return _dumps(_view_state(_case(case_id).create_view()))
+def ri_create_view(case_id: int = -1, own_surfaces_only: bool = True) -> str:
+    """Create a new 3D view on a case (needed before ri_snapshot if no view is open).
+
+    own_surfaces_only: show only the surfaces named after this case (<CASE>*), not every surface
+    in the project; change it later with ri_surfaces."""
+    view = _case(case_id).create_view()
+    out = _view_state(view)
+    if own_surfaces_only and _surface_names():
+        out["surfaces_in_view"] = _set_view_surfaces(view, own_case=True)["surfaces"]
+    return _dumps(out)
 
 
 def _slice_filter_xml(name: str, rng: Dict[str, tuple]) -> str:
@@ -994,7 +1010,8 @@ def ri_slice(slice_spec: str, view_id: int = -1, face_camera: bool = True) -> st
                 target.camera_point_of_interest = vf[0]
         target.update()
     out = _view_state(_view(view.id))
-    out["project_file"] = str(rsp)
+    if rsp:
+        out["project_file"] = str(rsp)
     return _dumps(out)
 
 
@@ -1018,11 +1035,12 @@ def ri_camera(direction: str, view_id: int = -1) -> str:
 _VIEW_TAGS = ("ReservoirView", "EclipseView", "GeoMechView")
 
 
-def _rewrite_view(view, edit, drop_camera: bool = False) -> Path:
+def _rewrite_view(view, edit, drop_camera: bool = False) -> Optional[Path]:
     """Save the project, apply edit(view_xml) -> view_xml to this view only, and reopen it.
 
     gRPC cannot create filters or intersections that are tied to their case, so these go
-    through the project file, as ri_slice does. Returns the temporary project path.
+    through the project file, as ri_slice does. Returns the temporary project path, or None
+    when the edit changes nothing (the project is then not reopened).
     """
     marker = f"__ri_view_{os.getpid()}_{int(time.time() * 1000)}__"
     coll = view.descendants(rips.generated.generated_classes.CellFilterCollection)[0]
@@ -1047,7 +1065,12 @@ def _rewrite_view(view, edit, drop_camera: bool = False) -> Path:
     f0 = block.rfind("<CellRangeFilter>", 0, block.find(f"<Name>{marker}</Name>"))
     f1 = block.find("</CellRangeFilter>", f0) + len("</CellRangeFilter>")
     block = block[:f0] + block[f1:]
+    unchanged = block
     block = edit(block)
+    if block == unchanged and not drop_camera:
+        # reopening reloads every case; skip it when there is nothing to change
+        tag.delete()
+        return None
     if drop_camera:
         block = re.sub(r"<CameraPosition>[^<]*</CameraPosition>|<CameraPointOfInterest>[^<]*</CameraPointOfInterest>",
                        "", block)
@@ -1128,7 +1151,8 @@ def ri_cell_filter(i: str = "", j: str = "", k: str = "", grid_index: int = 0, a
 
     rsp = _rewrite_view(view, edit)
     out = _view_state(_view(view.id))
-    out["project_file"] = str(rsp)
+    if rsp:
+        out["project_file"] = str(rsp)
     return _dumps(out)
 
 
@@ -1228,7 +1252,8 @@ def ri_intersection(points: Optional[List[List[float]]] = None, well: str = "", 
     rsp = _rewrite_view(view, edit)
     out = _view_state(_view(view.id))
     out["intersection"] = {"name": label, "points": points}
-    out["project_file"] = str(rsp)
+    if rsp:
+        out["project_file"] = str(rsp)
     return _dumps(out)
 
 
@@ -1258,7 +1283,132 @@ def ri_well_display(well: str = "", pipe_radius: float = 0.0, show_cells: Option
 
     rsp = _rewrite_view(view, edit)
     out = _view_state(_view(view.id))
-    out["project_file"] = str(rsp)
+    if rsp:
+        out["project_file"] = str(rsp)
+    return _dumps(out)
+
+
+def _surface_names() -> List[str]:
+    """Names of the project's top-level surfaces, in SurfaceRef order."""
+    return [getattr(x, "surface_user_description", "") for x in _project().surface_folder().surfaces_field()]
+
+
+def _case_base(case) -> str:
+    fp = getattr(case, "file_path", "") or ""
+    return Path(fp).stem if fp else case.name
+
+
+def _match_any(name: str, patterns: List[str]) -> bool:
+    low = name.lower()
+    return any(p == "all" or p.lower() in low for p in patterns)
+
+
+def _set_view_surfaces(view, show: Optional[List[str]] = None, hide: Optional[List[str]] = None,
+                       only: Optional[List[str]] = None, own_case: bool = False) -> Dict[str, Any]:
+    names = _surface_names()
+    base = _case_base(view.case()).lower() if own_case else ""
+    state: List[Dict[str, Any]] = []
+
+    pats = (only or []) + (show or []) + (hide or [])
+
+    def decide(name: Optional[str], active: bool) -> bool:
+        if name is None:
+            # in a sub-folder: only 'all' / 'none' reach it
+            if "none" in (only or []) or "all" in (hide or []) or "none" in (show or []):
+                return False
+            if "all" in pats:
+                return True
+            return active
+        if own_case:
+            return name.rsplit("/", 1)[-1].lower().startswith(base)
+        if only is not None:
+            return "none" not in only and _match_any(name, only)
+        if hide and (_match_any(name, hide) or "none" in hide):
+            active = False
+        if show and _match_any(name, show):
+            active = True
+        return active
+
+    def surface_of(block: str) -> Optional[str]:
+        m = re.search(r"<SurfaceRef>\s*(?:\.\.\s+)*SurfaceCollection 0 SurfacesField (\d+)\s*</SurfaceRef>", block)
+        if m and int(m.group(1)) < len(names):
+            return names[int(m.group(1))]
+        return None  # in a sub-collection: left as it is unless all/none
+
+    def per_surface(m):
+        blk = m.group(0)
+        name = surface_of(blk)
+        a = re.search(r"<Active>([^<]*)</Active>", blk)
+        active = bool(a) and a.group(1).strip() == "True"
+        new = decide(name, active)
+        state.append({"surface": name or "(in a sub-folder)", "shown": new})
+        if a:
+            blk = blk[:a.start()] + f"<Active>{'True' if new else 'False'}</Active>" + blk[a.end():]
+        return blk
+
+    def edit(block):
+        state.clear()
+        # SurfaceInView blocks nest a back-reference <SurfaceInView>..</SurfaceInView>; skip those
+        return re.sub(r"<SurfaceInView>\s*<Active>.*?<SurfaceRef>.*?</SurfaceRef>", per_surface, block, flags=re.S)
+
+    rsp = _rewrite_view(view, edit)
+    out = {"view_id": view.id, "surfaces": state}
+    if rsp:
+        out["project_file"] = str(rsp)
+    return out
+
+
+@mcp.tool()
+@_guard
+def ri_surfaces(view_id: int = -1, show: str = "", hide: str = "", only: str = "",
+                own_case: bool = False) -> str:
+    """List or set which surfaces (e.g. fracture .pvd surfaces) a view shows; hidden ones draw no legend.
+
+    show / hide / only: comma-separated parts of surface names, or 'all' / 'none'; 'only' shows the
+    matching surfaces and hides the rest. own_case: show only the surfaces named after the view's
+    case (<CASE>*). With no argument, lists them without changing anything. Other views keep theirs.
+    Goes through a temporary project file like ri_slice; the camera is kept.
+    """
+    view = _view(view_id)
+    split = lambda t: [p.strip() for p in t.split(",") if p.strip()]
+    if not (show or hide or only or own_case):
+        names = _surface_names()
+        return _dumps({"view_id": view.id, "project_surfaces": names,
+                       "hint": "pass show/hide/only/own_case to change which the view shows"})
+    out = _set_view_surfaces(view, split(show), split(hide), split(only) if only else None, own_case)
+    out.update(_view_state(_view(view.id)))
+    return _dumps(out)
+
+
+@mcp.tool()
+@_guard
+def ri_remove(case_ids: Optional[List[int]] = None, surfaces: str = "") -> str:
+    """Remove cases (with their views) and/or surfaces from the project, without closing it.
+
+    case_ids: ids from ri_overview. surfaces: comma-separated parts of surface names, or 'all'.
+    Nothing is deleted on disk. Case removal needs a ResInsight with Case.close() (2026-11-20+).
+    """
+    proj = _project()
+    out: Dict[str, Any] = {"removed_cases": [], "removed_surfaces": []}
+    for cid in case_ids or []:
+        case = next((c for c in _all_cases(proj) if c.id == cid), None)
+        if case is None:
+            raise ValueError(f"no case with id {cid}")
+        try:
+            case._call_pdm_method_void("close")
+        except Exception as e:
+            raise RuntimeError(f"this ResInsight cannot close a single case ({e}); rebuild it with Case.close()")
+        out["removed_cases"].append({"case_id": cid, "name": case.name})
+    pats = [p.strip() for p in surfaces.split(",") if p.strip()]
+    if pats:
+        for srf in list(proj.surface_folder().surfaces_field()):
+            name = getattr(srf, "surface_user_description", "")
+            if _match_any(name, pats):
+                srf.delete()
+                out["removed_surfaces"].append(name)
+    _S["cellinfo"].clear()
+    out["cases_left"] = [{"case_id": c.id, "name": c.name} for c in _all_cases(proj)]
+    out["surfaces_left"] = _surface_names()
     return _dumps(out)
 
 
