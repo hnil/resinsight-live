@@ -245,7 +245,7 @@ _EXPORT_TARGET = {
 }
 _BLOCKED_COMMANDS = {
     "runOctaveScript": "it runs arbitrary Octave code",
-    "closeProject": "this server did not start this ResInsight; close it from the GUI",
+    "closeProject": "this server did not start this ResInsight; close it from the GUI, or use ri_remove / openProject",
 }
 _PATHISH = re.compile(r"path|file|folder|dir", re.IGNORECASE)
 
@@ -1189,6 +1189,80 @@ def ri_cell_filter(i: str = "", j: str = "", k: str = "", grid_index: int = 0, a
 
 @mcp.tool()
 @_guard
+def ri_property_filter(result_variable: str, min_value: float, max_value: float, result_type: str = "DYNAMIC_NATIVE",
+                       exclude: bool = False, append: bool = False, view_id: int = -1) -> str:
+    """Show only cells whose result lies in [min_value, max_value] (exclude=True hides them instead).
+
+    E.g. result_variable='FilFraTh', min_value=1e-6, max_value=100 for fractured cells. Evaluated at
+    the view's current time step, together with any range filters. append keeps the view's other
+    property filters. Goes through a temporary project file like ri_slice; the camera is kept.
+    """
+    view = _view(view_id)
+    if _is_geomech(view):
+        raise ValueError("property filters are implemented here for grid views only")
+    mode = "EXCLUDE" if exclude else "INCLUDE"
+    label = f"{result_variable} in [{min_value:g}, {max_value:g}]"
+    xml = (f"<CellPropertyFilter><Name>{label}</Name><IsChecked>True</IsChecked><FilterType>{mode}</FilterType>"
+           f"<ResultDefinition><ResultDefinition><ResultType>{result_type}</ResultType>"
+           f"<PorosityModelType>MATRIX_MODEL</PorosityModelType><ResultVariable>{result_variable}</ResultVariable>"
+           f"</ResultDefinition></ResultDefinition>"
+           f"<LowerBound>{min_value!r}</LowerBound><UpperBound>{max_value!r}</UpperBound></CellPropertyFilter>")
+
+    def edit(block):
+        c = block.find("<CellPropertyFilters>")
+        if c < 0:
+            raise RuntimeError("the view has no property filter collection")
+        m = re.compile(r"<PropertyFilters\s*/>|<PropertyFilters>").search(block, c)
+        if not m:
+            raise RuntimeError("could not find the view's property filter list")
+        if m.group(0).endswith("/>"):
+            return block[:m.start()] + "<PropertyFilters>" + xml + "</PropertyFilters>" + block[m.end():]
+        b = block.find("</PropertyFilters>", m.end())
+        body = block[m.end():b] if append else ""
+        return block[:m.start()] + "<PropertyFilters>" + body + xml + block[b:]
+
+    rsp = _rewrite_view(view, edit)
+    out = _view_state(_view(view.id))
+    if rsp:
+        out["project_file"] = str(rsp)
+    return _dumps(out)
+
+
+@mcp.tool()
+@_guard
+def ri_legend_range(min_value: float, max_value: float, view_id: int = -1) -> str:
+    """Fix the cell-result colour range of a grid view to [min_value, max_value] (same range at every step).
+
+    Use the same range in views shown side by side. Applies to the legends of the view's cell
+    result. Legend position cannot be set: ResInsight stacks legends top-left in the view.
+    Goes through a temporary project file like ri_slice; the camera is kept.
+    """
+    view = _view(view_id)
+
+    def legend(m):
+        lg = m.group(0)
+        lg = re.sub(r"<RangeType>[^<]*</RangeType>", "<RangeType>USER_DEFINED_MAX_MIN</RangeType>", lg, count=1)
+        lg = re.sub(r"<UserDefinedMax>[^<]*</UserDefinedMax>", f"<UserDefinedMax>{max_value!r}</UserDefinedMax>", lg, count=1)
+        return re.sub(r"<UserDefinedMin>[^<]*</UserDefinedMin>", f"<UserDefinedMin>{min_value!r}</UserDefinedMin>", lg, count=1)
+
+    def edit(block):
+        a = block.find("<GridCellResult>")
+        if a < 0:
+            raise RuntimeError("the view has no cell result")
+        b = block.find("</GridCellResult>", a)
+        part = re.sub(r"<Legend>.*?</Legend>", legend, block[a:b], flags=re.S)
+        return block[:a] + part + block[b:]
+
+    rsp = _rewrite_view(view, edit)
+    out = _view_state(_view(view.id))
+    out["legend_range"] = [min_value, max_value]
+    if rsp:
+        out["project_file"] = str(rsp)
+    return _dumps(out)
+
+
+@mcp.tool()
+@_guard
 def ri_look_at(x: float, y: float, depth: float, direction: str = "front", distance: float = 0.0,
                view_id: int = -1) -> str:
     """Aim a view's camera at a world point: x, y (model coordinates) and depth (positive down).
@@ -1335,7 +1409,7 @@ def _match_any(name: str, patterns: List[str]) -> bool:
 
 
 def _set_view_surfaces(view, show: Optional[List[str]] = None, hide: Optional[List[str]] = None,
-                       only: Optional[List[str]] = None, own_case: bool = False) -> Dict[str, Any]:
+                       only: Optional[List[str]] = None, own_case: bool = False, color_by: str = "") -> Dict[str, Any]:
     names = _surface_names()
     base = _case_base(view.case()).lower() if own_case else ""
     state: List[Dict[str, Any]] = []
@@ -1377,10 +1451,24 @@ def _set_view_surfaces(view, show: Optional[List[str]] = None, hide: Optional[Li
             blk = blk[:a.start()] + f"<Active>{'True' if new else 'False'}</Active>" + blk[a.end():]
         return blk
 
+    def colour(block: str) -> str:
+        # SURFACE_COLOR draws the surface itself, coloured by its own property when one is checked
+        starts = [m.start() for m in re.finditer(r"<SurfaceInView>\s*<Active>", block)] + [len(block)]
+        parts = [block[:starts[0]]]
+        for a, b in zip(starts[:-1], starts[1:]):
+            blk = block[a:b]
+            if re.match(r"<SurfaceInView>\s*<Active>True</Active>", blk):
+                blk = re.sub(r"<SurfaceColorMode>[^<]*</SurfaceColorMode>",
+                             "<SurfaceColorMode>SURFACE_COLOR</SurfaceColorMode>", blk, count=1)
+                blk = re.sub(r"<PropertyName>[^<]*</PropertyName>", f"<PropertyName>{color_by}</PropertyName>", blk, count=1)
+            parts.append(blk)
+        return "".join(parts)
+
     def edit(block):
         state.clear()
         # SurfaceInView blocks nest a back-reference <SurfaceInView>..</SurfaceInView>; skip those
-        return re.sub(r"<SurfaceInView>\s*<Active>.*?<SurfaceRef>.*?</SurfaceRef>", per_surface, block, flags=re.S)
+        block = re.sub(r"<SurfaceInView>\s*<Active>.*?<SurfaceRef>.*?</SurfaceRef>", per_surface, block, flags=re.S)
+        return colour(block) if color_by else block
 
     rsp = _rewrite_view(view, edit)
     out = {"view_id": view.id, "surfaces": state}
@@ -1392,21 +1480,23 @@ def _set_view_surfaces(view, show: Optional[List[str]] = None, hide: Optional[Li
 @mcp.tool()
 @_guard
 def ri_surfaces(view_id: int = -1, show: str = "", hide: str = "", only: str = "",
-                own_case: bool = False) -> str:
+                own_case: bool = False, color_by: str = "") -> str:
     """List or set which surfaces (e.g. fracture .pvd surfaces) a view shows; hidden ones draw no legend.
 
     show / hide / only: comma-separated parts of surface names, or 'all' / 'none'; 'only' shows the
     matching surfaces and hides the rest. own_case: show only the surfaces named after the view's
     case (<CASE>*). With no argument, lists them without changing anything. Other views keep theirs.
+    color_by: colour the shown surfaces by one of their own properties (e.g. FractureWidth,
+    FracturePressure; FilterCakeThickness is often all zero), drawn as the surface itself.
     Goes through a temporary project file like ri_slice; the camera is kept.
     """
     view = _view(view_id)
     split = lambda t: [p.strip() for p in t.split(",") if p.strip()]
-    if not (show or hide or only or own_case):
+    if not (show or hide or only or own_case or color_by):
         names = _surface_names()
         return _dumps({"view_id": view.id, "project_surfaces": names,
                        "hint": "pass show/hide/only/own_case to change which the view shows"})
-    out = _set_view_surfaces(view, split(show), split(hide), split(only) if only else None, own_case)
+    out = _set_view_surfaces(view, split(show), split(hide), split(only) if only else None, own_case, color_by)
     out.update(_view_state(_view(view.id)))
     return _dumps(out)
 

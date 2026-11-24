@@ -14,7 +14,7 @@ reservoir simulation runs without touching the GUI.
   `ri_property_stats`, `ri_cell_values`, `ri_time_steps`, `ri_wells`, `ri_summary_cases`,
   `ri_summary_values`.
 - **Drive the view.** `ri_open`, `ri_create_view`, `ri_set_time_step`, `ri_set_cell_result`,
-  `ri_slice`, `ri_cell_filter`, `ri_intersection`, `ri_well_display`, `ri_camera`, `ri_look_at`,
+  `ri_slice`, `ri_cell_filter`, `ri_property_filter`, `ri_legend_range`, `ri_intersection`, `ri_well_display`, `ri_camera`, `ri_look_at`,
   `ri_surfaces`, `ri_remove`, `ri_summary_plot`, and `ri_execute_command` for anything else in ResInsight's command API.
 - **Render pictures of a run.** `ri_render` starts a private ResInsight, writes PNGs (properties
   at chosen steps, IJK slices, camera presets, summary plots), closes it and returns the images
@@ -34,6 +34,8 @@ view without slicing; the direction is the line of sight (eye towards model), no
 offset. `ri_open` also takes a `.GRDECL` grid with its properties.
 
 `ri_cell_filter(i="19:32", j="9:17", k="27")` shows an IJK box (LGRs inside it included).
+`ri_property_filter("FilFraTh", 1e-6, 100)` shows only cells with the result in that range (e.g. fractured
+cells); `ri_legend_range(40, 92)` fixes the colour range, to compare views side by side.
 `ri_intersection(well="W01")` or `ri_intersection(points=[[x, y], ...])` adds a vertical section
 along a well track or plan polyline, to grid and geomechanical views alike; `hide_cells=True`
 leaves only the section. `ri_look_at(x, y, depth, direction, distance)` aims a view at a model
@@ -47,7 +49,7 @@ polyhedral cells (fault or LGR face splits) are left out.
 Fracture surfaces (`<CASE>*.pvd` beside a grid) come in with the case. A new view from `ri_open`
 or `ri_create_view` shows only its own case's surfaces; `ri_surfaces(view_id, only="perf_14")`,
 `show=`, `hide=` or `own_case=True` change that per view (hidden surfaces draw no legend), and with
-no argument it lists them. `ri_remove(case_ids=[3], surfaces="Reveal_outline")` takes cases and
+no argument it lists them; `color_by="FractureWidth"` colours the shown surfaces by their own property. `ri_remove(case_ids=[3], surfaces="Reveal_outline")` takes cases and
 surfaces out of the project without closing it (case removal needs a ResInsight with
 `Case.close()`, 2026-11-20 or later). `closeProject` stays refused on an instance the plugin did
 not start. A `.pvd` surface follows the view by date: each step shows the last surface entry at or
